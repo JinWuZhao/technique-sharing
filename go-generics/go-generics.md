@@ -864,3 +864,7 @@ type Matrix[n int] [n][n]float64
 
 - <https://go.dev/doc/tutorial/generics>
 - <https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md>
+
+## 相关讨论
+
+[点击进入讨论区](https://github.com/JinWuZhao/technique-sharing/issues/1)
