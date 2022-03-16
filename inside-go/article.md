@@ -569,8 +569,8 @@ objdump -S -d ./app > app.dump
 上面的汇编代码中，可以看出main.sumSquare函数与main.main函数的汇编代码的开头和结尾非常的相似，都包含栈增长和减小、保存caller BP和恢复BP等操作。  
 留意下同一个内存地址在main.sumSquare(callee)中与main.main(caller)中相对SP的偏移量，可以用此公式换算：  
 > offset(caller) = offset(callee) - stacksize(callee) - size(return address)  
-比如main.sumSquare中的rsp+0x40与main.main函数中的rsp：
-> 0 = 0x40 - $0x38 - 8
+比如main.sumSquare中的rsp+0x40地址与main.main函数中的rsp地址中相对rsp的偏移量关系：
+> 0 = 0x40 - $0x38 - 0x8
 
 大家如果结合前面通过gdb信息描绘出的调用栈结构图来分析这节的汇编代码，会有更深刻的体会。
 
