@@ -409,7 +409,7 @@ i registers # 输出当前用到的所有寄存器的值
 
 使用Go 1.16编译示例 **function_call**， 使用容器环境中自带的工具 **objdump** 对生成的可执行文件反汇编：
 
-```text
+```sh
 go build -v -gcflags="-N -l" -o app ./function_call
 objdump -S -d ./app > app.dump
 ```
@@ -568,7 +568,7 @@ objdump -S -d ./app > app.dump
 
 上面的汇编代码中，可以看出main.sumSquare函数与main.main函数的汇编代码的开头和结尾非常的相似，都包含栈增长和减小、保存caller BP和恢复BP等操作。  
 留意下同一个内存地址在main.sumSquare(callee)中与main.main(caller)中相对SP的偏移量，可以用此公式换算：  
-> offset(caller) = offset(callee) - stacksize(callee) - size(return address)
+> offset(caller) = offset(callee) - stacksize(callee) - size(return address)  
 比如main.sumSquare中的rsp+0x40与main.main函数中的rsp：
 > 0 = 0x40 - $0x38 - 8
 
