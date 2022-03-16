@@ -139,7 +139,7 @@ i symbol 0x497700
 # 输出 main.sum in section .text of /go/src/examples/app
 ```
 
-可以看到这个地址来源于可执行文件app的 **.text** 段，这个用于存储程序指令的段（也就是代码部分）。联系前文的内存布局，也可以看到这个函数在内存空间中的位置 **0x400000-0x498000** 地址段。  
+可以看到这个地址来源于可执行文件app的 **.text** 段，这个用于存储程序指令的段（也就是Go代码编译成的机器指令）。联系前文的内存布局，也可以看到这个函数在内存空间中的位置 **0x400000-0x498000** 地址段。  
 
 再来看一下示例项目 **memory_layout** 中函数 **sum** 的参数 **a** 和 **b**。  
 执行以下gdb命令：
@@ -255,14 +255,14 @@ set listsize 100
 
 ### Go语言函数调用过程
 
-各位可能有了解过一些函数调用中的知识，比如函数的栈帧、栈指针、压栈和弹栈等等，这些底层的知识在很多语言中都存在，现在我们在Go程序中回顾一下。  
+各位可能有了解过一些函数调用中的知识，比如函数的栈帧、压栈和弹栈等等，这些底层的知识在很多语言中都存在，现在我们在Go程序中回顾一下。  
 
-#### 栈
+#### 调用栈
 
-栈（Stack）是进程内存中的一片连续的区域，发生函数的调用的时候，程序会在这片区域上申请一段空间用以存放参数、局部变量等信息，函数返回时，会将这段空间销毁。  
+调用栈（Call stack）是进程内存中的一片连续的区域，发生函数的调用的时候，程序会在这片区域上申请一段空间用以存放参数、局部变量等信息，函数返回时，会将这段空间销毁。  
 程序对这片内存区域的操作是按照栈结构的“先进后出”来进行的，通常栈由内存中的高地址向低地址增长，即栈底位于高地址处，栈顶位于低地址处，栈增长的行为叫做“压栈/入栈”（push），栈减小的行为叫做“弹栈/出栈"（pop）。  
 以下为栈空间的示意图：  
-![栈](stack.png)
+![调用栈](stack.png)
 
 #### 寄存器
 
@@ -276,17 +276,17 @@ CPU中的寄存器有很多种，不同的CPU架构的寄存器种类和数量�
 又称作程序计数器（PC），用来储存要执行的下一条指令的地址，每执行一条指令后IP寄存器的值都会变化。
 
 - 栈指针寄存器SP
-用来存储栈内存区域的地址，总是指向栈顶，可以通过对SP的偏移操作来表示压栈和弹栈。
+用来存储调用栈内存区域的地址，总是指向栈顶，可以通过对SP的偏移操作来实现压栈和弹栈。
 
-- 基址寄存器BP
-用于备份SP的值，在栈中辅助寻址用。
+- 基指针寄存器BP
+用于备份SP的值，在栈中辅助寻址用，通常保存的是函数临时变量区域的起始地址。
 
-64位CPU的单个寄存器最多可以存储8字节的数据，对寄存器的访问支持指定数据宽度：8位、16位、32位、64位。后文中你可能会在汇编指令中看到如al、ah、ax、eax、rax这样的寄存器名称，这些都是AX寄存器的不同访问方式，注意并不是所有寄存器都支持这样的访问方式。
+64位CPU的单个寄存器最多可以存储8字节的数据，对寄存器的访问支持指定数据宽度：8位、16位、32位、64位。后文中你可能会在汇编指令中看到如al、ah、ax、eax、rax这样的寄存器名称，这些都是对AX寄存器的不同访问方式，注意并不是所有寄存器都支持这样的访问。
 
 #### 栈帧
 
 栈帧也叫过程活动记录，是编译器用来实现过程/函数调用的一种数据结构。  
-每一次的函数调用，都会在调用栈上维护一个独立的栈帧（Stack Frame），每个独立的栈帧通常包括：  
+每一次的函数调用，都会在调用栈上维护一个栈帧（Stack Frame），每个栈帧通常包括：  
 
 - 传递给函数的参数
 - 函数的返回到调用者的地址(return address)
@@ -355,11 +355,11 @@ Stack frame at 0xc000112f88:
 - 命令 i frame n
 输出相对于断点处的栈帧信息，n=0 代表断点处所在的函数，n=1 则是更外一层的函数（即caller），以此类推。
 - Stack frame at 0xnnnnnn
-栈帧的起始地址，栈帧从此地址开始往低地址处延申。不过习惯上通常不把这个地址作为栈帧的起始，这里我们先入乡随俗，大家阅读其它资料时留意下防止产生困惑。
+栈帧的起始地址，栈帧从此地址开始往低地址处延申。
 - rip = 0xnnnnn in main.foo (...); saved rip = 0xnnnnn
 rip就是IP寄存器（64位值)，这里指在此函数中要执行的下一条指令（后面跟着源代码中的位置），可能是断点处接下来的指令（frame 0 的函数），也可能是调用其它函数后的下一条指令。 saved rip 是指Caller调用该函数后的下一条指令，可以观察下上面的三个栈帧的rip和saved rip的值，会发现saved rip其实就是caller的rip。
 - called by frame at 0xnnnnnnnnn, caller of frame at 0xnnnnnnnnn
-called by frame at 0xnnnnnnnnn是指该函数的caller的栈帧位置，caller of frame at 0xnnnnnnnnn指的是该函数中发生函数调用时callee栈帧位置。
+called by frame at 0xnnnnnnnnn是指该函数的caller的栈帧位置，caller of frame at 0xnnnnnnnnn指的是该函数中发生函数调用时callee的栈帧位置。
 - Arglist at 0xnnnnnnnnn, args: ...
 看描述是参数列表的起始地址，但其实并不是，要往高地址偏移一段跳过saved rip部分才是该函数的参数列表。
 - Locals at 0xnnnnnnnnn, Previous frame's sp is 0xnnnnnnnnn
@@ -399,13 +399,180 @@ i registers # 输出当前用到的所有寄存器的值
 ```
 
 使用gdb探索上面栈帧的输出信息，我们能描绘出当前调用栈的结构如下图：  
-![调用栈](call-stack.png)
+![调用栈结构](call-stack.png)
 
-上面图中的caller BP指的是caller中BP寄存器的值，大家可以留意下图中的caller BP指向的位置。
+上面图中的caller BP指的是caller中BP寄存器的值，大家可以留意下图中的caller BP指向的位置。图中需要留意的是，函数的参数和局部变量在调用栈上的排列顺序，这属于Go语言中的一种调用约定。
 
-## 语法、寄存器
+## 底层实现
 
-与AT&T ASM对比，伪寄存器
+我们编译Go代码得到的可执行文件中的 **.text** 段中的内容是给CPU执行的二进制机器指令，我们可将其反汇编为汇编指令，来探究下Go程序离机器最近时的样子。  
+
+使用Go 1.16编译示例 **function_call**， 使用容器环境中自带的工具 **objdump** 对生成的可执行文件反汇编：
+
+```text
+go build -v -gcflags="-N -l" -o app ./function_call
+objdump -S -d ./app > app.dump
+```
+
+用文本编辑器打开生成的文件 **app.dump**，搜索字符串 **<main.main>:**，定位到出现的位置，下面隔两行找到 **func main() {** 下面的代码，直到文件末尾，下面节选出来（省略了一些辅助信息和不重要的部分）：
+
+```asm
+  ...........................
+  4977b3: 48 83 ec 78           sub    $0x78,%rsp
+  4977b7: 48 89 6c 24 70        mov    %rbp,0x70(%rsp)
+  4977bc: 48 8d 6c 24 70        lea    0x70(%rsp),%rbp
+
+  4977c1: 48 c7 04 24 01 00 00  movq   $0x1,(%rsp)
+  4977c8: 00 
+  4977c9: 48 c7 44 24 08 02 00  movq   $0x2,0x8(%rsp)
+  4977d0: 00 00 
+  4977d2: e8 49 ff ff ff        callq  497720 <main.sumSquare>
+  4977d7: 48 8b 44 24 10        mov    0x10(%rsp),%rax
+  4977dc: 48 89 44 24 30        mov    %rax,0x30(%rsp)
+
+  ...........................
+  497870: 48 8b 6c 24 70        mov    0x70(%rsp),%rbp
+  497875: 48 83 c4 78           add    $0x78,%rsp
+  497879: c3                    retq   
+```
+
+上面的展示的是示例程序 **function_call** 中main函数的一部分反汇编内容。
+
+### 汇编语言
+
+汇编语言是一种低级语言，它使用助记符来代替和表示特定机器语言的操作指令。基本上汇编语言是与特定的机器语言指令集是一一对应的，本文中所采用的是**Intel x86_64**（又称**amd64**）架构的指令集。汇编语言有两大风格分别是**Intel**汇编和**AT&T**汇编。上文中使用的objdump工具得到的反汇编结果中的汇编语言是**AT&T**风格的（objdump工具默认采用AT&T汇编，也可以通过 **-M intel** 参数指定为Intel汇编）。  
+
+回到上节最后的main函数的反汇编结果，可以看出存在一个统一的格式，以第一行为例：
+
+- 4977b3
+可执行文件 **.text** 段中指令的地址，也对应进程内存中的地址（回顾前文的内存布局一节），注意这里是16进制的。
+- 48 83 ec 78
+对应的机器指令16进制码，空格分隔的每一个数字是一字节，这条指令占四字节。
+- sub $0x78,%rsp
+这个才是真正的汇编指令了，语法大致是：操作指令 [操作数,...]，**sub**就是操作指令，**$0x78,%rsp**则是两个操作数。  
+操作指令有很多种，取决于架构支持的指令集数量，常用的也就几十种。
+每种操作指令各自都有操作数的要求，大多是0~2个。  
+操作数可能是（包括但不限于）：  
+  - 立即数
+  **$**前缀的字面量的常数如：$0x1。
+  - 寄存器
+  **%**前缀的寄存器名称如：%rsp。
+  - 直接寻址
+  **FOO** 或者 **\$FOO** ，FOO指的是一个全局变量，带$的表示直接引用地址，不带的则是取内存的值。
+  - 间接寻址
+  格式为：immed32(basepointer, indexpointer, indexscale)，表示的地址为：immed32 + basepointer + indexpointer × indexscale。这里immed32是32位的立即数，basepointer是基础指针，indexpointer是索引指针，indexscale是索引的缩放值即倍数，basepointer和indexpointer一般是寄存器。
+
+汇编语言暂时就讲这些，由于本文目的不是汇编教学，因此不会进行全面地介绍，有兴趣的朋友可以自行找相关资料学习。
+
+### 汇编分析
+
+我们大致分析一下上面dump出的汇编代码。  
+下面是示例程序 **function_call** 种main函数里调用sumSquare函数的相关指令，为方便理解加上了一些注释：
+
+```text
+  ...........................
+  sub    $0x78,%rsp                  ; 用rsp的值减去0x78并存放到rsp里。
+                                     ; 相当于将SP向低地址移动了0x78字节，
+                                     ; 也就是调用栈的栈顶增长了0x78字节。
+
+  mov    %rbp,0x70(%rsp)             ; 将rbp的值存放到内存中rsp+0x70地址处（相对寻址）。
+                                     ; 相当于在距离栈顶0x70字节处存储了当前BP的值（即caller BP），
+                                     ; 这个BP值位于内存中 (rsp+0x78, rsp+0x70] 区间内。
+
+  lea    0x70(%rsp),%rbp             ; 将rsp+0x70地址处的内存值存放到rbp中。即修改了当前的BP。
+
+  movq   $0x1,(%rsp)                 ; 将立即数0x1存放到内存中rsp地址处，
+                                     ; 位于内存中 (rsp+0x8, rsp] 区间内。
+                                     ; 该值是main.sumSquare的第一个参数。
+
+  movq   $0x2,0x8(%rsp)              ; 将立即数0x2存放到内存中rsp+0x8地址处，
+                                     ; 位于内存中 (rsp+0x10, rsp+0x8] 区间内。
+                                     ; 该值是main.sumSquare的第二个参数。
+
+  callq  497720 <main.sumSquare>     ; 调用内存中497720地址处的函数。同时将rsp增加0x8，
+                                     ; 将rip的值存放到内存中rsp地址处，
+                                     ; 相当于把当前IP（下一条指令的地址）压入栈顶（即return address）。
+                                     ; 后面跟着的是该处的符号描述即main.sumSquare。
+
+  mov    0x10(%rsp),%rax             ; 将内存中rsp+0x10地址处的值存放到rax中，
+                                     ; rsp+0x10地址处存储着main.sumSquare的返回值。
+
+  mov    %rax,0x30(%rsp)             ; 将rax的值存放到内存中rsp+0x30地址处。
+                                     ; 这里是给后面省略的调用fmt.Println部分准备的。
+
+  ...........................
+
+  mov    0x70(%rsp),%rbp             ; 将内存中rsp+0x70地址处的值存放到rbp中，
+                                     ; 这里呼应开头第二行的指令mov %rbp,0x70(%rsp)，
+                                     ; 也就是恢复BP到原值（caller BP）。
+
+  add    $0x78,%rsp                  ; 用rsp的值加上0x78并存放到rsp里。
+                                     ; 相当于将SP向高地址移动了0x78字节，
+                                     ; 即调用栈的栈顶减小了0x78字节（呼应第一行指令sub $0x78,%rsp）。
+
+  retq                               ; 表示main.main函数返回，
+                                     ; 这个行为会将IP的值改为main.main函数caller（即rumtime.main）
+                                     ; 中的return address，并且将该return address从栈顶弹出。
+```
+
+以上汇编代码中，有个隐含的行为是：每一行指令执行后，IP寄存器都会自动增加（指向下一行指令的地址）。  
+
+接下来我们再看看main.sumSquare函数的汇编代码，按照前文的方法，在 **app.dump** 中搜索字符串 **<main.sumSquare>:**，就能找到对应的dump信息。这里我们直接节选汇编代码部分（省略一些不重要的内容，上面汇编代码中注释过的相似内容，下面就不再赘述了）：
+
+```text
+  sub    $0x38,%rsp         ; 栈顶增长0x38字节。
+  mov    %rbp,0x30(%rsp)    ; 保存caller BP。
+  lea    0x30(%rsp),%rbp    ; 修改当前BP。
+
+  movq   $0x0,0x50(%rsp)    ; 将(rsp+0x58, rsp+0x50]区间置空。
+                            ; 这里的rsp+0x50等价于main.main函数中的rsp+0x10，
+                            ; 也就是main.sumSquare的返回值。
+  
+  mov    0x40(%rsp),%rax    ; 这里的rsp+0x40等价于main.main函数中的rsp，
+                            ; 也就是main.sumSquare的第一个参数。
+  
+  mov    0x40(%rsp),%rcx    ; 这里引入一个新的寄存器rcx用于后面乘法运算和存放结果。
+  
+  imul   %rax,%rcx          ; 将rax与rcx的值相乘，结果存放于rcx中。即 sqa := a * a 。
+  
+  mov    %rcx,0x20(%rsp)    ; 这里rsp+0x20处的值作为局部变量sqa。
+  
+  mov    0x48(%rsp),%rax    ; 这里rsp+0x48等价于main.main函数中的rsp+0x8，
+                            ; 也就是main.sumSquare的第二个参数。
+  
+  mov    0x48(%rsp),%rcx    ; 这里复用寄存器rcx用于后面乘法运算和存放结果。
+  
+  imul   %rax,%rcx          ; 将rax与rcx的值相乘，结果存放于rcx中。即 sqb := b * b 。
+  
+  mov    %rcx,0x18(%rsp)    ; 这里rsp+0x18处的值作为局部变量sqb。
+  
+  mov    0x20(%rsp),%rax    ; 将rsp+0x20地址处的内存值存放到rax中。
+  
+  mov    %rax,(%rsp)        ; 这里rsp处的值作为main.sum的第一个参数。
+  
+  mov    %rcx,0x8(%rsp)     ; 这里rsp+0x8处的值作为main.sum的第二个参数。
+  
+  callq  497700 <main.sum>  ; 调用497700地址处的函数 main.sum。
+  
+  mov    0x10(%rsp),%rax    ; 这里rsp+0x10处的值为main.sum的返回值。
+  
+  mov    %rax,0x28(%rsp)    ; 此处同样为main.sum的返回值，看起来冗余了，
+                            ; 因为编译关闭了优化，这里就不纠结意义了。
+  
+  mov    %rax,0x50(%rsp)    ; 这里rsp+0x50为main.sumSquare的返回值。
+
+  mov    0x30(%rsp),%rbp    ； 恢复BP为原值caller BP。
+  add    $0x38,%rsp         ; 栈顶减小0x38字节。
+  retq                      ; main.sumSquare函数返回。
+```
+
+上面的汇编代码中，可以看出main.sumSquare函数与main.main函数的汇编代码的开头和结尾非常的相似，都包含栈增长和减小、保存caller BP和恢复BP等操作。  
+留意下同一个内存地址在main.sumSquare(callee)中与main.main(caller)中相对SP的偏移量，可以用此公式换算：  
+> offset(caller) = offset(callee) - stacksize(callee) - size(return address)
+比如main.sumSquare中的rsp+0x40与main.main函数中的rsp：
+> 0 = 0x40 - $0x38 - 8
+
+大家如果结合前面通过gdb信息描绘出的调用栈结构图来分析这节的汇编代码，会有更深刻的体会。
 
 ## 手写汇编
 
