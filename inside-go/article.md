@@ -688,7 +688,7 @@ go tool objdump -S app > app.go.dump
 
 这两种方式输出的文件与前文中直接使用objdump输出的格式是相似的。只不过 **go tool compile -S** 得到的只有main.go中代码对应的汇编结果，而 **go tool objdump -S** 得到的是可执行文件app里 **.text** 段的反汇编信息。而前者的dump文件由于其汇编结果尚未经过链接，因此其中的地址列是从 **0x0000 00000** 开始的偏移量，并且包含一些函数栈相关的信息，以及一些伪指令；后者的dump文件中的汇编代码已经经过了链接阶段，其中的地址列与直接objdump得到的是相同的，该dump文件中的内容精简了很多，基本和objdump出的信息差不多。  
 
-这里我们采用 **go tool compile -S** 的汇编结果来进行后续的讲解。下面贴出 **function_call** 示例的Go汇编结果，同样是省略一些不重要的信息，大家可以与前文[汇编分析](###汇编分析)部分的AT&T汇编代码对照着看看：  
+这里我们采用 **go tool compile -S** 的汇编结果来进行后续的讲解。下面贴出 **function_call** 示例的Go汇编结果，同样是省略一些不重要的信息，大家可以与前文[汇编分析](#汇编分析)部分的AT&T汇编代码对照着看看：  
 
 main函数：
 
@@ -713,11 +713,11 @@ main函数：
 sumSquare函数：
 
 ```asm
-(function_call/main.go:9)  SUBQ  $56, SP
-(function_call/main.go:9)  MOVQ  BP, 48(SP)
-(function_call/main.go:9)  LEAQ  48(SP), BP
+(function_call/main.go:9)   SUBQ  $56, SP
+(function_call/main.go:9)   MOVQ  BP, 48(SP)
+(function_call/main.go:9)   LEAQ  48(SP), BP
 
-(function_call/main.go:9)  MOVQ  $0, "".~r2+80(SP)
+(function_call/main.go:9)   MOVQ  $0, "".~r2+80(SP)
 (function_call/main.go:10)  MOVQ  "".a+64(SP), AX
 (function_call/main.go:10)  MOVQ  "".a+64(SP), CX
 (function_call/main.go:10)  IMULQ  AX, CX
