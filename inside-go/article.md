@@ -403,7 +403,7 @@ i registers # 输出当前用到的所有寄存器的值
 
 上面图中的caller BP指的是caller中BP寄存器的值，大家可以留意下图中的caller BP指向的位置。图中需要留意的是，函数的参数和局部变量在调用栈上的排列顺序，这属于Go语言中的一种调用约定。
 
-## 底层实现
+## 反汇编
 
 我们编译Go代码得到的可执行文件中的 **.text** 段中的内容是给CPU执行的二进制机器指令，我们可将其反汇编为汇编指令，来探究下Go程序离机器最近时的样子。  
 
@@ -491,7 +491,8 @@ objdump -S -d ./app > app.dump
 
   callq  497720 <main.sumSquare>     ; 调用内存中497720地址处的函数。同时将rsp增加0x8，
                                      ; 将rip的值存放到内存中rsp地址处，
-                                     ; 相当于把当前IP（下一条指令的地址）压入栈顶（即return address）。
+                                     ; 相当于把当前IP（下一条指令的地址）压入栈顶（即return address）,
+                                     ; 再把IP改为497720。
                                      ; 后面跟着的是该处的符号描述即main.sumSquare。
 
   mov    0x10(%rsp),%rax             ; 将内存中rsp+0x10地址处的值存放到rax中，
@@ -561,7 +562,7 @@ objdump -S -d ./app > app.dump
   
   mov    %rax,0x50(%rsp)    ; 这里rsp+0x50为main.sumSquare的返回值。
 
-  mov    0x30(%rsp),%rbp    ； 恢复BP为原值caller BP。
+  mov    0x30(%rsp),%rbp    ; 恢复BP为原值caller BP。
   add    $0x38,%rsp         ; 栈顶减小0x38字节。
   retq                      ; main.sumSquare函数返回。
 ```
@@ -572,11 +573,195 @@ objdump -S -d ./app > app.dump
 比如main.sumSquare中的rsp+0x40地址与main.main函数中的rsp地址中相对rsp的偏移量关系：
 > 0 = 0x40 - $0x38 - 0x8
 
-大家如果结合前面通过gdb信息描绘出的调用栈结构图来分析这节的汇编代码，会有更深刻的体会。
+大家如果结合前面通过gdb信息描绘出的调用栈结构图来分析这节的汇编代码，会有更深刻的体会。  
 
-## 手写汇编
+最后我们再看看main.sum函数的汇编代码：
 
-实现函数
+```asm
+  movq   $0x0,0x18(%rsp)    ; 将内存中(0x10, 0x18]区间置空。
+                            ; 这里rsp+0x18等价于main.sumSquare函数中的rsp+0x10地址，
+                            ; 作为main.sum函数的返回值。
+
+  mov    0x8(%rsp),%rax     ; 这里的rsp+0x8等价main.sumSquare函数中的rsp地址，
+                            ; 作为main.sum的第一个参数。
+
+  add    0x10(%rsp),%rax    ; 这里的rsp+0x10等价于main.sumSquare函数中的rsp+0x8地址，
+                            ; 作为main.sum的第二个参数，与rax中的第一个参数相加，即：a + b。
+
+  mov    %rax,0x18(%rsp)    ; 将上面加法运算得到的结果存放到返回值的地址处：rsp+0x18。
+  retq                      ; main.sum函数返回。
+```
+
+应该会发现main.sum函数的汇编代码相比main.main和main.sumSquare函数简单了很多。main.sum里没有了对调用栈的操作，因为main.sum中不存在临时变量，使用的参数和返回值又都在main.sumSquare的栈帧中，而且这里也没有了对BP的保存和恢复操作（后面再说原因），因此main.sum的栈帧中就仅剩下return address了，return address的压栈是call指令自动完成的。
+
+### Go语言的函数调用规约
+
+从前文的一系列示例分析中，我们可以总结出一个通用的调用栈结构：
+
+```text
+
+                                       caller                                                                                 
+       +---------------------->  +------------------+                                                                         
+       |                         |  return address  |                                                                         
+       |                         --------------------                                                                         
+       |                         |                  |                                                                         
+       |                         | caller parent BP |                                                                         
+       |                         --------------------                                                                         
+       |                         |                  |                                                                         
+       |                         |   Local Var0     |                                                                         
+       |                         --------------------                                                                         
+       |                         |                  |                                                                         
+       |                         |   .......        |                                                                         
+       |                         --------------------                                                                         
+       |                         |                  |                                                                         
+       |                         |   Local VarN     |                                                                         
+                                 --------------------                                                                         
+ caller stack frame              |                  |                                                                         
+                                 |   callee arg2    |                                                                         
+       |                         |------------------|                                                                         
+       |                         |                  |                                                                         
+       |                         |   callee arg1    |                                                                         
+       |                         |------------------|                                                                         
+       |                         |                  |                                                                         
+       |                         |   callee arg0    |                                                                         
+       +---------------------->  ----------------------------------------------+    <-------------------------------+         
+                                 |                  |                          |                                    |         
+                                 |  return address  |  parent return address   |                                    |         
+                                 +------------------+---------------------------                                    |         
+                                                    |                          |                                    |         
+                                                    |       caller BP          |                                    |         
+                                                BP  ----------------------------                                    |         
+                                                    |                          |                                    |         
+                                                    |     Local Var0           |                                    |         
+                                                    ----------------------------                                    |         
+                                                    |                          |                                              
+                                                    |     Local Var1           |                                              
+                                                    ----------------------------                            callee stack frame
+                                                    |                          |                                              
+                                                    |       .....              |                                              
+                                                    ----------------------------                                    |         
+                                                    |                          |                                    |         
+                                                    |     Local VarN           |                                    |         
+                                                SP  ----------------------------                                    |         
+                                                    |                          |                                    |         
+                                                    |                          |                                    |         
+                                                    |                          |                                    |         
+                                                    |                          |                                    |         
+                                                    |                          |                                    |         
+                                                    +--------------------------+    <-------------------------------+         
+                                                                                                                              
+                                                              callee
+```
+
+Go语言的函数调用包含以下操作过程：
+
+1. 如果callee存在参数，那么将callee的参数值按一定次序放入caller的栈帧中，顺序为Arg(n)、Arg(n-1)、Arg(n-2)...Arg(0)
+2. 执行call指令，将return address压入栈顶，IP改为callee的地址
+3. 如果callee中存在临时变量或者其它函数调用的参数，那么将SP向低地址偏移，使调用栈增长足够的空间作为callee的栈帧
+4. 如果步骤3中调用栈有增长，那么保存当前BP（caller BP）到callee的栈帧中，修改当前BP为SP的值
+5. 如果callee中存在临时变量，那么将变量值按一定次序放入caller的栈帧中，顺序为Var(0)、Var(1)、Var(2)...Var(n)
+6. 如果callee中有调用其它函数，那么回到步骤1，注意回到1后的callee指代的是新的函数，caller指代的是前面的callee
+7. 如果callee中没有其它调用了，那么执行完之后，将返回值放入caller的栈帧（如果有的话）
+8. 恢复当前BP为caller BP（如果栈帧中保存了caller BP的话）
+9. 将SP向高地址偏移，使步骤3中增长的调用栈恢复到原本的大小
+10. 执行ret指令，使return address从栈顶弹出，并将IP改为return address，后续将回到caller继续执行
+
+以上便是Go语言在amd64架构下函数调用的的规约，注意其它的架构下可能会有不同。
+
+## Go的汇编语言
+
+下面使Go程序的主要编译过程：  
+> 解析代码成AST -> 生成SSA IR -> 汇编 -> 链接 -> 生成可执行文件  
+
+上面的 **汇编** 阶段生成汇编代码，得到的汇编结果中的指令地址是从0开始的偏移量的形式。  
+**链接** 阶段会对汇编结果做调整，将地址信息从偏移量转换为可执行文件中的逻辑地址。  
+
+Go语言编译器工具链中有实现自己的汇编器，所使用的汇编语言来自于[Plan9](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)汇编器。Go语言的汇编语法风格与常见的Intel汇编和AT&T汇编都有一定区别，我们可以使用以下两种方式得到Go汇编代码（以示例代码 **function_call** 为例）：
+
+```sh
+go tool compile -S -N -l function_call/main.go > app.go.dump
+```
+
+```sh
+go tool objdump -S app > app.go.dump
+```
+
+这两种方式输出的文件与前文中直接使用objdump输出的格式是相似的。只不过 **go tool compile -S** 得到的只有main.go中代码对应的汇编结果，而 **go tool objdump -S** 得到的是可执行文件app里 **.text** 段的反汇编信息。而前者的dump文件由于其汇编结果尚未经过链接，因此其中的地址列是从 **0x0000 00000** 开始的偏移量，并且包含一些函数栈相关的信息，以及一些伪指令；后者的dump文件中的汇编代码已经经过了链接阶段，其中的地址列与直接objdump得到的是相同的，该dump文件中的内容精简了很多，基本和objdump出的信息差不多。  
+
+这里我们采用 **go tool compile -S** 的汇编结果来进行后续的讲解。下面贴出 **function_call** 示例的Go汇编结果，同样是省略一些不重要的信息，大家可以与前文[汇编分析](###汇编分析)部分的AT&T汇编代码对照着看看：  
+
+main函数：
+
+```asm
+; ........................
+(function_call/main.go:15)  SUBQ  $120, SP
+(function_call/main.go:15)  MOVQ  BP, 112(SP)
+(function_call/main.go:15)  LEAQ  112(SP), BP
+
+(function_call/main.go:16)  MOVQ  $1, (SP)
+(function_call/main.go:16)  MOVQ  $2, 8(SP)
+(function_call/main.go:16)  CALL  "".sumSquare(SB)
+(function_call/main.go:16)  MOVQ  16(SP), AX
+(function_call/main.go:16)  MOVQ  AX, "".ret+48(SP)
+; ........................
+
+(function_call/main.go:18)  MOVQ  112(SP), BP
+(function_call/main.go:18)  ADDQ  $120, SP
+(function_call/main.go:18)  RET
+```
+
+sumSquare函数：
+
+```asm
+(function_call/main.go:9)  SUBQ  $56, SP
+(function_call/main.go:9)  MOVQ  BP, 48(SP)
+(function_call/main.go:9)  LEAQ  48(SP), BP
+
+(function_call/main.go:9)  MOVQ  $0, "".~r2+80(SP)
+(function_call/main.go:10)  MOVQ  "".a+64(SP), AX
+(function_call/main.go:10)  MOVQ  "".a+64(SP), CX
+(function_call/main.go:10)  IMULQ  AX, CX
+(function_call/main.go:10)  MOVQ  CX, "".sqa+32(SP)
+(function_call/main.go:11)  MOVQ  "".b+72(SP), AX
+(function_call/main.go:11)  MOVQ  "".b+72(SP), CX
+(function_call/main.go:11)  IMULQ  AX, CX
+(function_call/main.go:11)  MOVQ  CX, "".sqb+24(SP)
+(function_call/main.go:12)  MOVQ  "".sqa+32(SP), AX
+(function_call/main.go:12)  MOVQ  AX, (SP)
+(function_call/main.go:12)  MOVQ  CX, 8(SP)
+(function_call/main.go:12)  CALL  "".sum(SB)
+(function_call/main.go:12)  MOVQ  16(SP), AX
+(function_call/main.go:12)  MOVQ  AX, ""..autotmp_5+40(SP)
+(function_call/main.go:12)  MOVQ  AX, "".~r2+80(SP)
+
+(function_call/main.go:12)  MOVQ  48(SP), BP
+(function_call/main.go:12)  ADDQ  $56, SP
+(function_call/main.go:12)  RET
+```
+
+sum函数：
+
+```asm
+(function_call/main.go:5)  MOVQ  $0, "".~r2+24(SP)
+(function_call/main.go:6)  MOVQ  "".a+8(SP), AX
+(function_call/main.go:6)  ADDQ  "".b+16(SP), AX
+(function_call/main.go:6)  MOVQ  AX, "".~r2+24(SP)
+(function_call/main.go:6)  RET
+```
+
+汇编结果中贴心的给出了指令对应的源代码位置，这里也一并贴出来了，方便各位查看。
+
+### 寄存器名称
+
+### 指令与操作数
+
+### 伪寄存器
+
+### 伪寄存器SP与FP
+
+### 手写汇编
+
+### 函数结构
 
 ## 参数传递（栈和寄存器，参数类型）
 
