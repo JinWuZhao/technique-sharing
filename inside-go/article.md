@@ -1,8 +1,8 @@
-# Go语言底层探究
+# Go语言底层探究-基础篇
 
 ## 前言
 
-// TODO
+本文带大家深入Go语言的底层，探究Go代码的运行原理。
 
 ## 准备工作
 
@@ -15,7 +15,7 @@
 请将代码示例[examples](examples)下载到本地，后面的实验中，以此目录作为工作目录。
 
 - Go编译器
-这里使用的Docker镜像，golang:1.16-buster, golang:1.17-buster, golang:1.18-buster，可以提前pull下来。  
+这里使用的Docker镜像，golang:1.16-buster, golang:1.17-buster，可以提前pull下来。  
 
 启动命令参考，后文启动Go开发环境皆以此方式执行：
 
@@ -34,7 +34,7 @@ apt-get install gdb
 ```
 
 - 其它工具
-objdump、readelf（容器环境自带）
+objdump（容器环境自带）
 
 ## 内存布局
 
@@ -489,7 +489,7 @@ objdump -S -d ./app > app.dump
                                      ; 位于内存中 (rsp+0x10, rsp+0x8] 区间内。
                                      ; 该值是main.sumSquare的第二个参数。
 
-  callq  497720 <main.sumSquare>     ; 调用内存中497720地址处的函数。同时将rsp增加0x8，
+  callq  497720 <main.sumSquare>     ; 调用内存中0x497720地址处的函数。同时将rsp增加0x8，
                                      ; 将rip的值存放到内存中rsp地址处，
                                      ; 相当于把当前IP（下一条指令的地址）压入栈顶（即return address）,
                                      ; 再把IP改为497720。
@@ -553,7 +553,7 @@ objdump -S -d ./app > app.dump
   
   mov    %rcx,0x8(%rsp)     ; 这里rsp+0x8处的值作为main.sum的第二个参数。
   
-  callq  497700 <main.sum>  ; 调用497700地址处的函数 main.sum。
+  callq  497700 <main.sum>  ; 调用0x497700地址处的函数 main.sum。
   
   mov    0x10(%rsp),%rax    ; 这里rsp+0x10处的值为main.sum的返回值。
   
@@ -594,7 +594,7 @@ objdump -S -d ./app > app.dump
 
 应该会发现main.sum函数的汇编代码相比main.main和main.sumSquare函数简单了很多。main.sum里没有了对调用栈的操作，因为main.sum中不存在临时变量，使用的参数和返回值又都在main.sumSquare的栈帧中，而且这里也没有了对BP的保存和恢复操作（后面再说原因），因此main.sum的栈帧中就仅剩下return address了，return address的压栈是call指令自动完成的。
 
-### Go语言的函数调用规约
+### Go语言的函数调用约定
 
 从前文的一系列示例分析中，我们可以总结出一个通用的调用栈结构：
 
@@ -653,7 +653,7 @@ objdump -S -d ./app > app.dump
                                                               callee
 ```
 
-Go语言的函数调用包含以下操作过程：
+Go语言的函数调用包含以下过程：
 
 1. 如果callee存在参数，那么将callee的参数值按一定次序放入caller的栈帧中，顺序为Arg(n)、Arg(n-1)、Arg(n-2)...Arg(0)
 2. 执行call指令，将return address压入栈顶，IP改为callee的地址
@@ -666,9 +666,89 @@ Go语言的函数调用包含以下操作过程：
 9. 将SP向高地址偏移，使步骤3中增长的调用栈恢复到原本的大小
 10. 执行ret指令，使return address从栈顶弹出，并将IP改为return address，后续将回到caller继续执行
 
-以上便是Go语言在amd64架构下函数调用的的规约，注意其它的架构下可能会有不同。
+调用约定是一种定义函数从调用处接受参数以及返回结果的方法的约定。比如C++语言，就有__cdecl、__stdcall、__fastcall、naked、__pascal、__thiscall等多种调用约定。  
+从Go1.12开始，Go编译器中定义了两种调用约定 **ABI0** 和 **ABIInternal** 。**ABI0**为旧有的调用约定，**ABIInternal**是不稳定的，会随着版本迭代发生变化的调用约定。  
+**ABIInternal**用于Go语言定义的函数，而**ABI0**用于在汇编中定义的函数，对于跨ABI调用函数的情况，编译器会自动分析并提供相应的ABI包装器来实现透明的调用。
+Go语言的调用约定，在Go1.16（包含）之前是基于栈的调用，也就是上文中描述的调用方式，是将函数参数和返回值都放在栈上来进行传递。  
+Go1.17开始启用基于寄存器的调用，此版本中 **ABI0** 指原来的基于栈的调用约定，**ABIInternal** 就是基于寄存器的调用约定。
 
-## Go的汇编语言
+### 基于寄存器的调用
+
+Go1.17版本开始引入了基于寄存器的调用。相比原来的单纯基于栈的调用，性能有了一定提升。  
+该调用方式是使用栈和寄存器组合传递函数参数和返回值。每个参数或返回值要么完全在寄存器中传递，要么完全在栈中传递。因为访问寄存器通常比访问栈要快，所以参数和返回值会优先在寄存器中传递。但是任何包含非平凡数组或不完全适合剩余可用寄存器的参数或结果都会在栈上传递。  
+每个体系结构都定义了一个整数寄存器序列和一个浮点寄存器序列。在高层次上，参数和结果被递归地分解为基本类型的值，并分配给对应序列中的寄存器。  
+参数和返回值可以共享相同的寄存器，但不共享相同的栈空间。在关闭了编译优化的情况下，除了在栈上传递的参数和返回值之外，调用者还在栈上为所有基于寄存器的参数保留溢出空间（但不填充此空间）。  
+编译器通过一套算法来决定将参数和返回值分配在寄存器上还是栈上、决定如何分配寄存器。详情请阅读官方文档：[https://tip.golang.org/src/cmd/compile/abi-internal](https://tip.golang.org/src/cmd/compile/abi-internal)。  
+
+我们可以尝试下使用Go1.17来生成示例程序 **function_call** 的汇编结果：
+
+```sh
+go build -v -gcflags="-N -l" -o app ./function_call
+objdump -S -d ./app > app.dump
+```
+
+下面给出和前文相同形式的输出节选：
+
+main函数：
+
+```asm
+  sub    $0x60,%rsp
+  mov    %rbp,0x58(%rsp)
+  lea    0x58(%rsp),%rbp
+  mov    $0x1,%eax
+  mov    $0x2,%ebx
+  callq  47e320 <main.sumSquare>
+  mov    %rax,0x18(%rsp)
+  ; ...........................
+  mov    0x58(%rsp),%rbp
+  add    $0x60,%rsp
+  retq
+```
+
+sumSquare函数：
+
+```asm
+  sub    $0x38,%rsp
+  mov    %rbp,0x30(%rsp)
+  lea    0x30(%rsp),%rbp
+  mov    %rax,0x40(%rsp)
+  mov    %rbx,0x48(%rsp)
+  movq   $0x0,0x10(%rsp)
+  mov    0x40(%rsp),%rcx
+  mov    0x40(%rsp),%rdx
+  imul   %rcx,%rdx
+  mov    %rdx,0x20(%rsp)
+  mov    0x48(%rsp),%rbx
+  mov    0x48(%rsp),%rcx
+  imul   %rcx,%rbx
+  mov    %rbx,0x18(%rsp)
+  mov    0x20(%rsp),%rax
+  callq  47e2e0 <main.sum>
+  mov    %rax,0x28(%rsp)
+  mov    %rax,0x10(%rsp)
+  mov    0x30(%rsp),%rbp
+  add    $0x38,%rsp
+  retq
+```
+
+sum函数：
+
+```asm
+  sub    $0x10,%rsp
+  mov    %rbp,0x8(%rsp)
+  lea    0x8(%rsp),%rbp
+  mov    %rax,0x18(%rsp)
+  mov    %rbx,0x20(%rsp)
+  movq   $0x0,(%rsp)
+  mov    0x18(%rsp),%rax
+  add    0x20(%rsp),%rax
+  mov    %rax,(%rsp)
+  mov    0x8(%rsp),%rbp
+  add    $0x10,%rsp
+  retq
+```
+
+## Go汇编语言
 
 下面使Go程序的主要编译过程：  
 > 解析代码成AST -> 生成SSA IR -> 汇编 -> 链接 -> 生成可执行文件  
@@ -753,26 +833,71 @@ sum函数：
 
 ### 寄存器名称
 
+Go汇编指令中的寄存器名称不用带前缀来表示宽度，比如AT&T汇编中的 **rax**、**eax** 等等，在Go汇编中统一写作 **AX**。  
+
 ### 指令与操作数
+
+操作指令很多需要后缀表明操作的宽度，比如 **MOVEQ**、**SUBQ**等等。  
+操作数的顺序，大部分都是用第二个操作数来存放结果，这一点跟AT&T汇编类似。了解过Intel汇编的朋友会发现刚好是相反的顺序。  
+
+比如：
+
+```asm
+MOVQ $1,(SP)
+```
+
+对应AT&T汇编：
+
+```asm
+movq $0x1,(%rsp)
+```
+
+注意这里Go汇编的的立即数 **$1** 是十进制的。
 
 ### 伪寄存器
 
-### 伪寄存器SP与FP
+Go汇编中提供了几个伪寄存器：
+
+- PC: 程序计数器。其实就是指IP寄存器，比较少用。
+- SB: 静态基指针。用于引用全局的符号，使用**package.symbol(SB)**的方式来引用符号的地址，**"".symbol(SB)**表示当前包的符号。比如**CALL "".sum(SB)**，对应的AT&T汇编是**callq 497700**，汇编器会将指令中的 **"".sum(SB)** 转换为sum函数的地址偏移量，编译器在链接阶段会将其转换成逻辑地址**0x497700**。
+
+### 通过SP寻址
+
+通过**package.symbol+offset(SP)**的方式来进行寻址，比如 **"".sqa+32(SP)** 表示局部变量sqa，这里的**package.symbol**并没有什么实际用途，只是方便阅读。还有一种通过**offset(SP)**（不带symbol）的方式来寻址。
+
+### 间接寻址
+
+Go汇编中还会出现这种间接寻址方式：
+
+```asm
+offset(basepointer)(index*scale) ; address = basepointer + index * scale + offset (scale取值1、2、 4、8)
+```
+
+例如：
+
+```asm
+64(DI)(BX*2) ; address = DI + BX * 2 + 64
+```
+
+这个与前文提到过的AT&T汇编的间接寻址方式是等价的。
 
 ### 手写汇编
 
-### 函数结构
+前文的对Go汇编的介绍和代码示例，都是基于**go tool compile -S**和**go tool objdump**得到的汇编结果来讲的，如果是手写汇编，会有一些区别，本文不是汇编教程，就不详细介绍了，有兴趣的可以看官方文档了解一下：[https://go.dev/doc/asm](https://go.dev/doc/asm)。
 
-## 参数传递（栈和寄存器，参数类型）
+## 参考资料
 
-压栈过程，参数传递方法，栈传递参数和寄存器传递参数，各参数类型的传递方法。
-
-## 控制结构
-
-## 泛型实现
-
-Go 1.18Beta2
-
-## 其他知识
-
-sadfasdf
+- [https://go.dev/doc/gdb](https://go.dev/doc/gdb)
+  Go语言对于GDB的扩展。
+- [https://tip.golang.org/src/cmd/compile/abi-internal](https://tip.golang.org/src/cmd/compile/abi-internal)
+  Go语言内部ABI规范。
+- [https://go.googlesource.com/proposal/+/master/design/27539-internal-abi.md](https://go.googlesource.com/proposal/+/master/design/27539-internal-abi.md)
+  关于Go语言两种调用约定的提案。
+- [https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md](https://go.googlesource.com/proposal/+/master/design/40724-register-calling.md)
+  关于Go语言基于寄存器的调用提案。
+- [https://go.dev/doc/asm](https://go.dev/doc/asm)
+  Go汇编官方文档。
+- [https://github.com/cch123/asmshare/blob/master/layout.md](https://github.com/cch123/asmshare/blob/master/layout.md)
+  Go汇编教程。
+- [https://github.com/cch123/golang-notes/blob/master/assembly.md](https://github.com/cch123/golang-notes/blob/master/assembly.md)
+  Go汇编完全解析。
