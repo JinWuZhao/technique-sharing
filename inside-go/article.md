@@ -557,8 +557,7 @@ objdump -S -d ./app > app.dump
   
   mov    0x10(%rsp),%rax    ; 这里rsp+0x10处的值为main.sum的返回值。
   
-  mov    %rax,0x28(%rsp)    ; 此处同样为main.sum的返回值，看起来冗余了，
-                            ; 因为编译关闭了优化，这里就不纠结意义了。
+  mov    %rax,0x28(%rsp)    ; 此处同样为main.sum的返回值，是冗余的临时变量。
   
   mov    %rax,0x50(%rsp)    ; 这里rsp+0x50为main.sumSquare的返回值。
 
@@ -677,7 +676,7 @@ Go1.17开始启用基于寄存器的调用，此版本中 **ABI0** 指原来的�
 Go1.17版本开始引入了基于寄存器的调用。相比原来的单纯基于栈的调用，性能有了一定提升。  
 该调用方式是使用栈和寄存器组合传递函数参数和返回值。每个参数或返回值要么完全在寄存器中传递，要么完全在栈中传递。因为访问寄存器通常比访问栈要快，所以参数和返回值会优先在寄存器中传递。但是任何包含非平凡数组或不完全适合剩余可用寄存器的参数或结果都会在栈上传递。  
 每个体系结构都定义了一个整数寄存器序列和一个浮点寄存器序列。在高层次上，参数和结果被递归地分解为基本类型的值，并分配给对应序列中的寄存器。  
-参数和返回值可以共享相同的寄存器，但不共享相同的栈空间。在关闭了编译优化的情况下，除了在栈上传递的参数和返回值之外，调用者还在栈上为所有基于寄存器的参数保留溢出空间（但不填充此空间）。  
+参数和返回值可以共享相同的寄存器，但不共享相同的栈空间。除了在栈上传递的参数和返回值之外，调用者还在栈上为所有基于寄存器的参数保留溢出空间（但不填充此空间）。  
 编译器通过一套算法来决定将参数和返回值分配在寄存器上还是栈上、决定如何分配寄存器。详情请阅读官方文档：[https://tip.golang.org/src/cmd/compile/abi-internal](https://tip.golang.org/src/cmd/compile/abi-internal)。  
 
 我们可以尝试下使用Go1.17来生成示例程序 **function_call** 的汇编结果：
@@ -692,40 +691,44 @@ objdump -S -d ./app > app.dump
 main函数：
 
 ```asm
-  sub    $0x60,%rsp
-  mov    %rbp,0x58(%rsp)
-  lea    0x58(%rsp),%rbp
-  mov    $0x1,%eax
-  mov    $0x2,%ebx
-  callq  47e320 <main.sumSquare>
-  mov    %rax,0x18(%rsp)
+  sub    $0x60,%rsp                  ; 扩展调用栈
+  mov    %rbp,0x58(%rsp)             ; 保存caller BP
+  lea    0x58(%rsp),%rbp             ; 更新BP
+
+  mov    $0x1,%eax                   ; 第一个参数放在AX中
+  mov    $0x2,%ebx                   ; 第二个参数放在BX中
+  callq  47e320 <main.sumSquare>     ; 调用sumSquare
+  mov    %rax,0x18(%rsp)             ; 从AX中取出sumSquare的返回值放入栈中，用于后续fmt.Println的相关调用
   ; ...........................
-  mov    0x58(%rsp),%rbp
-  add    $0x60,%rsp
-  retq
+
+  mov    0x58(%rsp),%rbp             ; 恢复BP
+  add    $0x60,%rsp                  ; 回收调用栈
+  retq                               ; 函数返回
 ```
 
 sumSquare函数：
 
 ```asm
-  sub    $0x38,%rsp
+  sub    $0x38,%rsp               
   mov    %rbp,0x30(%rsp)
   lea    0x30(%rsp),%rbp
-  mov    %rax,0x40(%rsp)
-  mov    %rbx,0x48(%rsp)
-  movq   $0x0,0x10(%rsp)
-  mov    0x40(%rsp),%rcx
-  mov    0x40(%rsp),%rdx
-  imul   %rcx,%rdx
-  mov    %rdx,0x20(%rsp)
-  mov    0x48(%rsp),%rbx
-  mov    0x48(%rsp),%rcx
-  imul   %rcx,%rbx
-  mov    %rbx,0x18(%rsp)
-  mov    0x20(%rsp),%rax
-  callq  47e2e0 <main.sum>
-  mov    %rax,0x28(%rsp)
-  mov    %rax,0x10(%rsp)
+
+  mov    %rax,0x40(%rsp)        ; 将AX的值放入栈中（参数1）
+  mov    %rbx,0x48(%rsp)        ; 将BX的值放入栈中（参数2）
+  movq   $0x0,0x10(%rsp)        ; 初始化返回值空间
+  mov    0x40(%rsp),%rcx        ; 将栈上的值放入CX中（参数1）
+  mov    0x40(%rsp),%rdx        ; 将栈上的值放入DX中（参数1）
+  imul   %rcx,%rdx              ; CX与DX相乘，结果放入DX中
+  mov    %rdx,0x20(%rsp)        ; 将DX的值放入栈中（局部变量1）
+  mov    0x48(%rsp),%rbx        ; 将栈上的值放入BX中（参数2）
+  mov    0x48(%rsp),%rcx        ; 将栈上的值放入CX中（参数2）
+  imul   %rcx,%rbx              ; CX与BX相乘，结果放入BX中（作为sum的参数2）
+  mov    %rbx,0x18(%rsp)        ; 将BX的值放入栈中（局部变量2）
+  mov    0x20(%rsp),%rax        ; 将栈上的值放入AX中（局部变量1，作为sum的参数1）
+  callq  47e2e0 <main.sum>      ; 调用sum函数
+  mov    %rax,0x28(%rsp)        ; 将AX的值放入栈中（sum的返回值）
+  mov    %rax,0x10(%rsp)        ; 将AX的值放入栈中（返回值）
+
   mov    0x30(%rsp),%rbp
   add    $0x38,%rsp
   retq
@@ -737,16 +740,21 @@ sum函数：
   sub    $0x10,%rsp
   mov    %rbp,0x8(%rsp)
   lea    0x8(%rsp),%rbp
-  mov    %rax,0x18(%rsp)
-  mov    %rbx,0x20(%rsp)
-  movq   $0x0,(%rsp)
-  mov    0x18(%rsp),%rax
-  add    0x20(%rsp),%rax
-  mov    %rax,(%rsp)
+
+  mov    %rax,0x18(%rsp)         ; 将AX的值放入栈中（参数1）
+  mov    %rbx,0x20(%rsp)         ; 将BX的值放入栈中（参数2）
+  movq   $0x0,(%rsp)             ; 初始化返回值空间
+  mov    0x18(%rsp),%rax         ; 将栈上的值放入AX中（参数1）
+  add    0x20(%rsp),%rax         ; 将栈上的值（参数2）与AX（参数1）相加放入AX中（返回值）
+  mov    %rax,(%rsp)             ; 将AX放入栈中（返回值）
+
   mov    0x8(%rsp),%rbp
   add    $0x10,%rsp
   retq
 ```
+
+分析下上面的汇编代码可以看到，虽然用了寄存器传递参数和返回值，但是也保留了在栈上分配的行为（仅仅是存储，并未实际用到），而且内存布局较之前基于栈的调用也发生了细微的变化。  
+本文的实验中我们都是关闭了优化和内联（使用了 **-N -l** 选项），有兴趣的朋友可以试试启用优化，仅关闭内联（使用 **-l** 选项），来观察下汇编结果有哪些不同。
 
 ## Go汇编语言
 
