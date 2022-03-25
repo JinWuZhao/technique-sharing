@@ -1,0 +1,39 @@
+未优化(-N -l)：
+49(SP): a3 spill space
+48(SP): a1 spill space
+
+<pointer-sized alignment>
+
+42(SP): r1.y[1]
+41(SP): r1.y[0]
+40(SP): r1.x
+
+<pointer-sized alignment>
+
+33(SP): a2[1]
+32(SP): a2[0]
+
+<pointer-sized alignment>
+
+16(SP): BP
+
+8(SP): len(r2) spill space
+(SP): r2 spill space
+
+AX: a1 -> r2
+BX: a3 -> len(r2)
+
+优化后(-l)：
+18(SP): r1.y[1]
+17(SP): r1.y[0]
+16(SP): r1.x
+
+<pointer-sized alignment>
+
+9(SP): a2[1]
+8(SP): a2[0]
+
+<pointer-sized alignment>
+
+AX: a1 -> r2
+BX: a3 -> len(r2)

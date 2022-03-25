@@ -734,7 +734,7 @@ nums := FromStrings[Settable]([]string{"1", "2"})
 
 ### 类型转换
 
-类型参数也可以用于变量的类型转换：
+类型参数也可以用于变量的类型转换，可进行转换的前提是类型集合中的所有类型互相都可以进行转换。
 
 ```go
 type Integer interface {
