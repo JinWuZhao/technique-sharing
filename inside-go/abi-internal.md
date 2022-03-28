@@ -1,0 +1,474 @@
+# Go内部ABI规范（翻译&注解）
+
+## 正文
+
+本文描述了Go的内部应用程序二进制接口（ABI），称为ABIInternal。Go的ABI定义了内存中数据的布局以及Go函数之间调用的约定。该ABI不稳定，会随着Go版本发生变化。如果您正在编写汇编代码，请参阅Go的[汇编文档](https://go.dev/doc/asm#directives)，该文档描述了Go的稳定ABI，称为 ABI0。  
+
+Go代码中定义的所有函数都遵循ABIInternal。但是ABIInternal和ABI0函数能够通过透明的ABI包装器相互调用，如[内部调用约定提案](https://golang.org/design/27539-internal-abi)中所述。  
+
+Go在所有架构中使用通用的ABI设计。 我们首先描述常见的ABI，然后介绍每个架构的细节。  
+
+基本原理：关于跨架构使用通用ABI而不是跨平台ABI背后的原因，请参阅[基于寄存器的Go调用约定提案](https://golang.org/design/40724-register-calling)。  
+
+### 内存布局
+
+Go的内置类型具有以下大小（Size）和对齐方式（Align）。语言规范保证了许多类型的布局（尽管不是全部）。那些不能保证的可能会在Go的未来版本中发生变化（例如，我们考虑过在32位上更改int64的对齐方式）。  
+
+| Type                        | 64-bit |       | 32-bit |       |
+| --------------------------- | ------ | ----- | ------ | ----- |
+|                             | Size   | Align | Size   | Align |
+| bool, uint8, int8           | 1      | 1     | 1      | 1     |
+| uint16, int16               | 2      | 2     | 2      | 2     |
+| uint32, int32               | 4      | 4     | 4      | 4     |
+| uint64, int64               | 8      | 8     | 8      | 4     |
+| int, uint                   | 8      | 8     | 4      | 4     |
+| float32                     | 4      | 4     | 4      | 4     |
+| float64                     | 8      | 8     | 8      | 4     |
+| complex64                   | 8      | 4     | 8      | 4     |
+| complex128                  | 16     | 8     | 16     | 4     |
+| uintptr, *T, unsafe.Pointer | 8      | 8     | 4      | 4     |
+
+`byte`和`rune`类型分别是`uint8`和`int32`的别名，因此具有与这些类型相同的大小和对齐方式。  
+
+`map`、`chan`和`func`类型的布局等价于*T。  
+
+为了描述其余复合类型的布局，我们首先定义具有N个字段的类型*序列*S的布局t<sub>1</sub>, t<sub>2</sub>, ..., t<sub>N</sub>。  
+我们定义每个字段相对于0的基地址，以及序列的大小和对齐方式如下：  
+
+```text
+offset(S, i) = 0  if i = 1
+             = align(offset(S, i-1) + sizeof(t_(i-1)), alignof(t_i))
+alignof(S)   = 1  if N = 0
+             = max(alignof(t_i) | 1 <= i <= N)
+sizeof(S)    = 0  if N = 0
+             = align(offset(S, N) + sizeof(t_N), alignof(S))
+```
+
+其中sizeof(T)和alignof(T)分别是类型T的大小和对齐方式，而align(x, y)是将x向上舍入为y的倍数。  
+
+`interface{}`类型是由 1. 一个指向代表接口动态类型的运行时类型描述的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。  
+任何其他接口类型（除了空接口）都是由 1. 一个指向给出方法指针和数据字段的类型的运行时“itab”的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。  
+接口可以是“直接的（direct）”或“间接的（indirect）”，取决于其动态类型：direct接口将值直接存储在数据字段中，indirect接口存储指向数据字段值的指针。  
+只有当值由单个指针组成时，接口才能是direct的。  
+
+数组类型“[N]T”是由N个类型为T的字段组成的序列。  
+
+切片类型`[]T`是指向切片后备存储的`*[cap]T`指针序列，还有一个表示“len”的“int”字段和一个表示“cap”的“int”字段。  
+
+`string`类型是一个指向字符串后备存储的`*[len]byte`指针序列，以及一个表示`len`的`int`字段。  
+
+结构体类型`struct { f1 t1; ...; fM tM }`被布局为序列t1, ..., tM, tP，其中tP为以下其一：  
+
+- 如果sizeof(tM) = 0并且sizeof(t*i*) ≠ 0，则为`byte`数据。
+- 否则为空（Size为0，Align为1）。
+
+填充字节（padding byte）通过获取最终的空fN字段的地址来防止创建超出终点的指针。  
+
+请注意，用户编写的汇编代码通常不应依赖于Go类型布局，而应使用[`go_asm.h`](https://go.dev/doc/asm#data-offsets)中定义的常量。
+
+### 函数调用参数和结果的传递
+
+函数调用使用栈和寄存器组合传递参数和结果。  
+每个参数或结果要么完全在寄存器中传递，要么完全在栈中传递。  
+因为访问寄存器通常比访问栈快，所以参数和结果优先在寄存器中传递。  
+但是，任何包含非平凡数组或不完全适合剩余可用寄存器的参数或结果都会在栈上传递。  
+
+每个体系结构都定义了一个整数寄存器序列和一个浮点寄存器序列。  
+在高层次上，参数和结果被递归地分解为基本类型的值，并且将这些基本值分配给这些序列中的寄存器。  
+
+参数和结果可以共享相同的寄存器，但不共享相同的栈空间。  
+除了在栈上传递的参数和结果之外，调用者还在栈上为所有基于寄存器的参数保留溢出空间（但不填充此空间）。  
+
+函数或方法F的接收器、参数和结果使用以下算法分配给寄存器或栈：  
+
+1. 令NI和NFP为架构定义的整数和浮点寄存器序列的长度。令I和FP为0；这些是下一个整数和浮点寄存器的索引。令定义栈帧的类型序列S为空。
+2. 如果F是个方法，分配F的接收器。
+3. 遍历F的每个参数A，分配A。
+4. 添加一个指针对齐（pointer-alignment）字段到S中。它的Size为0，Align与`uintptr`相同。
+5. 重置I和FP为0。
+6. 遍历F的每个结果R，分配R。
+7. 添加一个pointer-alignment字段到S中。
+8. 遍历F的每个寄存器分配的（register-assigned）接收器和参数, 令T为它的类型并将T添加到栈序列S中。这是参数（或接收者）的溢出空间，在调用时是未初始化的。
+9. 添加一个pointer-alignment字段到S中。
+
+分配一个底层类型为T的接收者、参数或结果V的工作方式如下：  
+
+1. 记忆I和FP。
+2. 如果T的Size为0，添加T到栈序列S中然后返回。
+3. 尝试寄存器分配（register-assign）V。
+4. 如果第三步失败，重置I和FP为第一步的值，添加T到栈序列S中，并且分配V到S中的这个字段上。
+
+底层类型为T的值V的寄存器分配（Register-assignment）工作方式如下：  
+
+1. 如果T是适合整数寄存器的布尔或整数类型，则将V分配给寄存器I并递增I。
+2. 如果T是适合两个整数寄存器的整数类型，则将V的最低有效部分和最高有效部分分别分配给寄存器I和I+1，并将I增加2。
+3. 如果T是浮点类型并且可以在浮点寄存器中不损失精度地表示，则将V分配给寄存器FP并递增FP。
+4. 如果T是一个复杂类型，则递归地register-assign它的实部和虚部。
+5. 如果T是指针类型、映射类型、通道类型或函数类型，则将V分配给寄存器I并递增I。
+6. 如果T是字符串类型、接口类型或切片类型，则递归地register-assign V的组件（字符串和接口有2个，切片有3个）。
+7. 如果T是结构体类型，则递归地register-assign V 的每个字段。
+8. 如果T是长度为0的数组类型，则什么也不做。
+9. 如果T是长度为1的数组类型，则递归地register-assign它的一个元素。
+10. 如果T是长度 > 1的数组类型，则失败。
+11. 如果I > NI或FP > NFP，则失败。
+12. 如果上述任何递归分配失败，则失败。
+
+上述算法将每个接收器、参数和结果分配给寄存器或栈序列中的字段。
+最终的栈序列如下所示：栈分配的（stack-assigned）接收器、stack-assigned参数、指针对齐、stack-assigned结果、指针对齐、每个register-assigned参数的溢出空间，指针对齐。
+下图显示了这个栈帧在栈上的样子，使用地址0位于底部的典型约定：  
+
+```text
+    +------------------------------+
+    |             . . .            |
+    | 2nd reg argument spill space |
+    | 1st reg argument spill space |
+    | <pointer-sized alignment>    |
+    |             . . .            |
+    | 2nd stack-assigned result    |
+    | 1st stack-assigned result    |
+    | <pointer-sized alignment>    |
+    |             . . .            |
+    | 2nd stack-assigned argument  |
+    | 1st stack-assigned argument  |
+    | stack-assigned receiver      |
+    +------------------------------+ ↓ lower addresses
+```
+
+为了执行函数调用，调用者从其栈帧中的最低地址开始为调用栈帧保留空间，将参数存储在由上述算法确定的寄存器和参数栈字段中，并执行调用。
+在调用时，溢出空间、结果栈字段和结果寄存器未初始化。
+返回时，被调用者必须将结果存储到由上述算法确定的所有结果寄存器和结果栈字段中。
+
+没有被调用者保存的（callee-save）寄存器，因此调用可能会覆盖任何没有固定含义的寄存器，包括参数寄存器。
+
+### 例子
+
+考虑具有假想的整数寄存器R0-R9的64位架构上的函数`func f(a1 uint8, a2 [2]uintptr, a3 uint8) (r1 struct { x uintptr; y [2]uintptr }, r2 string)`。  
+
+进入时，`a1`分配给`R0`，`a3`分配给`R1`，栈帧按以下顺序排列：
+
+```text
+    a2      [2]uintptr
+    r1.x    uintptr
+    r1.y    [2]uintptr
+    a1Spill uint8
+    a3Spill uint8
+    _       [6]uint8  // alignment padding
+```
+
+在栈帧中，只有`a2`字段在进入时被初始化；帧的其余部分未初始化。  
+
+退出时，`r2.base`分配给`R0`，`r2.len`分配给`R1`，并且`r1.x`和`r1.y`在栈帧中被初始化。  
+
+在这个例子中有几件事需要注意。
+首先，`a2`和`r1`是栈分配的，因为它们包含数组。其他参数和结果是寄存器分配的。
+结果`r2`被分解成它的组件，这些组件分别是寄存器分配的。
+在栈上，栈分配的参数出现在低于栈分配结果的地址，栈分配的结果出现在低于参数溢出区域的地址。
+只有参数，而不是结果，被分配到栈上的溢出区域。  
+
+### 基本原理
+
+每个基值都分配给属于自己的寄存器以优化构造和访问。
+另一种方法是将多个sub-word值打包到寄存器中，或者简单地将参数的内存布局映射到寄存器（这在C ABI中很常见），但这通常会增加打包和解包这些值的成本。
+现代架构有足够多的寄存器来以这种方式为几乎所有函数传递所有参数和结果（参见附录），因此在寄存器之间传播基值几乎没有缺点。  
+
+不能完全分配给寄存器的参数将完全在栈上传递，以防被调用者获取该参数的地址。
+如果一个参数可以在栈和寄存器中拆分，并且被调用者获取它的地址，则需要在内存中重建它，这个过程与参数的大小成正比。  
+
+非平凡的数组总是在栈上传递，因为索引数组通常需要计算出的偏移量，而这对于寄存器来说通常是不可能的。
+数组通常在函数签名中很少见（Go 1.15标准库中只有0.7%，kubelet中有0.2%）。
+我们考虑允许数组字段在栈上传递，同时参数的其余字段在寄存器中传递，除了被调用者获取参数的地址时会产生与其他大型结构体相同的问题外，会对< 0.1%的kubelet中的函数（即使很少）有益。  
+
+我们对0个元素和1个元素的数组进行了例外处理，因为它们不需要计算偏移量，并且1个元素的数组已经在编译器的SSA表示中分解。  
+
+如果架构寄存器为零，则上面的ABI分配算法等效于Go的基于栈的ABI0调用约定。
+这旨在简化向基于寄存器的内部ABI的过渡，并使编译器可以轻松生成任一调用约定。
+架构可能仍然定义了与ABI0不兼容的寄存器含义，但这些差异应该很容易在编译器中解释。  
+
+分配算法将零大小的值分配给栈（分配步骤2）以支持与ABI0的等效性。
+虽然这些值本身不占用空间，但它们确实会导致ABI0中栈上的对齐填充。
+如果没有这一步，即使在不提供参数寄存器的架构上，内部ABI也会寄存器分配零大小的值，因为它们不消耗任何寄存器，因此不会向栈添加对齐填充。  
+
+该算法为调用者帧中的参数保留溢出空间，以便编译器可以生成溢出到该保留空间中的栈增长路径。
+如果被调用者必须增加栈，它可能无法在自己的帧中保留足够的额外栈空间来溢出这些，这就是调用者这样做很重要的原因。
+如果出于任何其他原因需要溢出这些参数，这些插槽也可以作为主位置，这简化了traceback打印。  
+
+如何布置参数溢出空间有多种选择。
+我们选择根据其类型通常的内存布局来布置每个参数，但将溢出空间与常规参数空间分开。
+使用通常的内存布局可以简化编译器，因为它已经理解了这种布局。
+此外，如果函数获取寄存器分配参数的地址，编译器必须在其通常的内存布局中将该参数溢出到内存中，并且为此目的使用参数溢出空间更方便。  
+
+或者溢出空间可以围绕参数寄存器构建。
+在这种方法中，栈增长溢出路径会将每个参数寄存器溢出到一个寄存器大小的栈字（stack word）。
+然而，如果函数获取寄存器分配参数的地址，编译器将不得不在栈上其他位置的内存布局中重建它。  
+
+溢出空间也可以与栈分配的参数交错，因此无论它们是寄存器分配还是栈分配，参数都会按顺序出现。
+这将接近ABI0，除了寄存器分配的参数将在栈上未初始化并且无需为寄存器分配的结果保留栈空间之外。
+由于内存局部性，我们希望分离溢出空间以便于更好地执行。
+对于`reflect`调用，分隔空间也可能更简单，因为这允许`reflect`将溢出空间汇总为一个数字。
+最后，长期意图是完全删除保留的溢出槽 ———— 允许在没有任何栈设置的情况下调用大多数函数，使引入callee-save的寄存器更容易 ———— 分离溢出空间使这种转换更容易。  
+
+### 闭包
+
+func值（例如，`var x func()`）是指向闭包对象的指针。
+闭包对象以表示函数入口点的指针大小的PC（程序计数器）开始，后跟包含封闭环境的零个或多个字节。  
+
+闭包调用遵循与静态函数和方法调用相同的约定，但增加了一个。 每个体系结构都指定一个*闭包上下文指针*寄存器，并且对闭包的调用在调用之前将闭包对象的地址存储在闭包上下文指针寄存器中。  
+
+### 软件浮点模式
+
+在“软浮点”模式下，ABI只是将硬件视为具有零浮点寄存器的设备。
+因此，任何包含浮点值的参数都将在栈上传递。  
+
+*基本原理*：软浮点模式是关于兼容性而不是性能，并不常用。
+因此在这种情况下，我们使ABI尽可能简单，而不是添加额外的规则来在整数寄存器中传递浮点值。
+
+### 架构细节
+
+本节描述了每个体系结构的寄存器映射，以及其他每个体系结构的特殊情况。  
+
+#### amd64架构
+
+amd64架构对整数参数和结果使用以下9个寄存器序列：  
+
+> RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11
+
+它将X0–X14用于浮点参数和结果。  
+
+*基本原理*：这些序列是从可用的寄存器中选择的，比较容易记住。  
+
+寄存器R12和R13是永久暂存（permanent scratch）寄存器。
+R15是一个暂存（scratch）寄存器，在动态链接的二进制文件中除外。  
+
+*基本原理*：栈增长和反射调用等一些操作需要专用的暂存寄存器，以便在不破坏参数或结果的情况下操作调用帧。  
+
+专用寄存器如下：  
+
+| Register | Call meaning                       | Return meaning | Body meaning |
+| -------- | ---------------------------------- | -------------- | ------------ |
+| RSP      | Stack pointer                      | Same           | Same         |
+| RBP      | Frame pointer                      | Same           | Same         |
+| RDX      | Closure context pointer            | Scratch        | Scratch      |
+| R12      | Scratch                            | Scratch        | Scratch      |
+| R13      | Scratch                            | Scratch        | Scratch      |
+| R14      | Current goroutine                  | Same           | Same         |
+| R15      | GOT reference temporary if dynlink | Same           | Same         |
+| X15      | Zero value (*)                     | Same           | Scratch      |
+
+(*)Plan9除外，其中X15是暂存寄存器，因为SSE寄存器不能在标记的处理程序中使用（因此编译器会避免使用它们，除非绝对必要）。  
+
+*基本原理*：这些寄存器含义与Go的基于栈的调用约定兼容，除了R14和X15，它们必须在从ABI0代码转换到ABIInternal代码时恢复。
+在ABI0中，这些是未定义的，因此从ABIInternal到ABI0的转换可以忽略这些寄存器。  
+
+*基本原理*：对于当前的goroutine指针，我们选择了一个需要额外REX字节（REX前缀）的寄存器。
+虽然这为每个函数序言（function prologue）添加了一个字节，但它几乎不会在函数序言之外访问，我们希望提供更多的单字节寄存器以实现净赢。  
+
+*基本原理*：我们可以允许R14（当前的goroutine指针）作为函数体中的暂存寄存器，因为它总是可以从amd64上的TLS恢复。
+但是为了简单起见，我们将其指定为固定寄存器，并与其他可能没有TLS中当前goroutine指针副本的架构保持一致。  
+
+*基本原理*：我们将X15指定为固定零寄存器，因为函数通常必须将其栈帧批量归零，而使用指定的零寄存器更高效。  
+
+*实现说明*：在调用时具有固定含义但不在函数体中的寄存器必须由“注入”调用初始化，例如基于信号的panics。  
+
+##### 栈布局
+
+堆栈指针RSP向下增长并始终对齐到8个字节。  
+
+amd64架构不使用链接寄存器。  
+
+一个函数的栈帧布局如下：  
+
+```text
+    +------------------------------+
+    | return PC                    |
+    | RBP on entry                 |
+    | ... locals ...               |
+    | ... outgoing arguments ...   |
+    +------------------------------+ ↓ lower addresses
+```
+
+“return PC”作为标准amd64 `CALL`操作的一部分被推送。
+进入时，函数减小RSP以开放其栈帧并将RBP的值保存在return PC的正下方。
+不需要任何栈空间的末端函数可以省略保存的RBP。  
+
+Go ABI使用RBP作为帧指针寄存器与amd64平台约定兼容，因此Go可以与平台调试器和分析器互操作。  
+
+##### 标志寄存器
+
+调用时，方向标志(DF)始终被清除（设置为“前进”方向）。
+算术状态标志被视为暂存寄存器，并且不会在调用之间保留。
+RFLAGS中的所有其他位都是系统标志。  
+
+在函数调用和返回时，CPU处于x87模式（不是MMX技术模式）。  
+
+*基本原理*：amd64不使用x87寄存器或MMX寄存器。因此我们遵循SysV平台约定以简化与C ABI之间的转换。  
+
+在调用时，MXCSR控制位总是如下设置：  
+
+| Flag | Bit   | Value  | Meaning                    |
+| ---- | ----- | ------ | -------------------------- |
+| FZ   | 15    | 0      | Do not flush to zero       |
+| RC   | 14/13 | 0 (RN) | Round to nearest           |
+| PM   | 12    | 1      | Precision masked           |
+| UM   | 11    | 1      | Underflow masked           |
+| OM   | 10    | 1      | Overflow masked            |
+| ZM   | 9     | 1      | Divide-by-zero masked      |
+| DM   | 8     | 1      | Denormal operations masked |
+| IM   | 7     | 1      | Invalid operations masked  |
+| DAZ  | 6     | 0      | Do not zero de-normals     |
+
+MXCSR状态位是被调用者保存的。  
+
+*基本原理*：拥有固定的MXCSR控制配置允许Go函数使用SSE操作，而无需修改或保存MXCSR。
+允许函数在调用之间修改它（只要能恢复它），但在撰写本文时，Go代码从未这样做过。
+上述固定配置与ELF AMD64 ABI指定的进程初始化控制位相匹配。  
+
+在amd64上Go不使用x87浮点控制字。  
+
+#### 其它架构
+
+请阅读原文。
+
+### 未来发展方向
+
+#### 溢出路径改进
+
+The ABI currently reserves spill space for argument registers so the
+compiler can statically generate an argument spill path before calling
+into `runtime.morestack` to grow the stack.
+This ensures there will be sufficient spill space even when the stack
+is nearly exhausted and keeps stack growth and stack scanning
+essentially unchanged from ABI0.
+
+However, this wastes stack space (the median wastage is 16 bytes per
+call), resulting in larger stacks and increased cache footprint.
+A better approach would be to reserve stack space only when spilling.
+One way to ensure enough space is available to spill would be for
+every function to ensure there is enough space for the function's own
+frame *as well as* the spill space of all functions it calls.
+For most functions, this would change the threshold for the prologue
+stack growth check.
+For `nosplit` functions, this would change the threshold used in the
+linker's static stack size check.
+
+Allocating spill space in the callee rather than the caller may also
+allow for faster reflection calls in the common case where a function
+takes only register arguments, since it would allow reflection to make
+these calls directly without allocating any frame.
+
+The statically-generated spill path also increases code size.
+It is possible to instead have a generic spill path in the runtime, as
+part of `morestack`.
+However, this complicates reserving the spill space, since spilling
+all possible register arguments would, in most cases, take
+significantly more space than spilling only those used by a particular
+function.
+Some options are to spill to a temporary space and copy back only the
+registers used by the function, or to grow the stack if necessary
+before spilling to it (using a temporary space if necessary), or to
+use a heap-allocated space if insufficient stack space is available.
+These options all add enough complexity that we will have to make this
+decision based on the actual code size growth caused by the static
+spill paths.
+
+#### Clobber sets
+
+As defined, the ABI does not use callee-save registers.
+This significantly simplifies the garbage collector and the compiler's
+register allocator, but at some performance cost.
+A potentially better balance for Go code would be to use *clobber
+sets*: for each function, the compiler records the set of registers it
+clobbers (including those clobbered by functions it calls) and any
+register not clobbered by function F can remain live across calls to
+F.
+
+This is generally a good fit for Go because Go's package DAG allows
+function metadata like the clobber set to flow up the call graph, even
+across package boundaries.
+Clobber sets would require relatively little change to the garbage
+collector, unlike general callee-save registers.
+One disadvantage of clobber sets over callee-save registers is that
+they don't help with indirect function calls or interface method
+calls, since static information isn't available in these cases.
+
+#### Large aggregates
+
+Go encourages passing composite values by value, and this simplifies
+reasoning about mutation and races.
+However, this comes at a performance cost for large composite values.
+It may be possible to instead transparently pass large composite
+values by reference and delay copying until it is actually necessary.
+
+### Appendix: Register usage analysis
+
+In order to understand the impacts of the above design on register
+usage, we
+[analyzed](https://github.com/aclements/go-misc/tree/master/abi) the
+impact of the above ABI on a large code base: cmd/kubelet from
+[Kubernetes](https://github.com/kubernetes/kubernetes) at tag v1.18.8.
+
+The following table shows the impact of different numbers of available
+integer and floating-point registers on argument assignment:
+
+```
+|      |        |       |      stack args |          spills |     stack total |
+| ints | floats | % fit | p50 | p95 | p99 | p50 | p95 | p99 | p50 | p95 | p99 |
+|    0 |      0 |  6.3% |  32 | 152 | 256 |   0 |   0 |   0 |  32 | 152 | 256 |
+|    0 |      8 |  6.4% |  32 | 152 | 256 |   0 |   0 |   0 |  32 | 152 | 256 |
+|    1 |      8 | 21.3% |  24 | 144 | 248 |   8 |   8 |   8 |  32 | 152 | 256 |
+|    2 |      8 | 38.9% |  16 | 128 | 224 |   8 |  16 |  16 |  24 | 136 | 240 |
+|    3 |      8 | 57.0% |   0 | 120 | 224 |  16 |  24 |  24 |  24 | 136 | 240 |
+|    4 |      8 | 73.0% |   0 | 120 | 216 |  16 |  32 |  32 |  24 | 136 | 232 |
+|    5 |      8 | 83.3% |   0 | 112 | 216 |  16 |  40 |  40 |  24 | 136 | 232 |
+|    6 |      8 | 87.5% |   0 | 112 | 208 |  16 |  48 |  48 |  24 | 136 | 232 |
+|    7 |      8 | 89.8% |   0 | 112 | 208 |  16 |  48 |  56 |  24 | 136 | 232 |
+|    8 |      8 | 91.3% |   0 | 112 | 200 |  16 |  56 |  64 |  24 | 136 | 232 |
+|    9 |      8 | 92.1% |   0 | 112 | 192 |  16 |  56 |  72 |  24 | 136 | 232 |
+|   10 |      8 | 92.6% |   0 | 104 | 192 |  16 |  56 |  72 |  24 | 136 | 232 |
+|   11 |      8 | 93.1% |   0 | 104 | 184 |  16 |  56 |  80 |  24 | 128 | 232 |
+|   12 |      8 | 93.4% |   0 | 104 | 176 |  16 |  56 |  88 |  24 | 128 | 232 |
+|   13 |      8 | 94.0% |   0 |  88 | 176 |  16 |  56 |  96 |  24 | 128 | 232 |
+|   14 |      8 | 94.4% |   0 |  80 | 152 |  16 |  64 | 104 |  24 | 128 | 232 |
+|   15 |      8 | 94.6% |   0 |  80 | 152 |  16 |  64 | 112 |  24 | 128 | 232 |
+|   16 |      8 | 94.9% |   0 |  16 | 152 |  16 |  64 | 112 |  24 | 128 | 232 |
+|    ∞ |      8 | 99.8% |   0 |   0 |   0 |  24 | 112 | 216 |  24 | 120 | 216 |
+```
+
+The first two columns show the number of available integer and
+floating-point registers.
+The first row shows the results for 0 integer and 0 floating-point
+registers, which is equivalent to ABI0.
+We found that any reasonable number of floating-point registers has
+the same effect, so we fixed it at 8 for all other rows.
+
+The “% fit” column gives the fraction of functions where all arguments
+and results are register-assigned and no arguments are passed on the
+stack.
+The three “stack args” columns give the median, 95th and 99th
+percentile number of bytes of stack arguments.
+The “spills” columns likewise summarize the number of bytes in
+on-stack spill space.
+And “stack total” summarizes the sum of stack arguments and on-stack
+spill slots.
+Note that these are three different distributions; for example,
+there’s no single function that takes 0 stack argument bytes, 16 spill
+bytes, and 24 total stack bytes.
+
+From this, we can see that the fraction of functions that fit entirely
+in registers grows very slowly once it reaches about 90%, though
+curiously there is a small minority of functions that could benefit
+from a huge number of registers.
+Making 9 integer registers available on amd64 puts it in this realm.
+We also see that the stack space required for most functions is fairly
+small.
+While the increasing space required for spills largely balances out
+the decreasing space required for stack arguments as the number of
+available registers increases, there is a general reduction in the
+total stack space required with more available registers.
+This does, however, suggest that eliminating spill slots in the future
+would noticeably reduce stack requirements.
+
+## 注解
+
+## 参考资料
+
+- [Go internal ABI specification](https://go.googlesource.com/go/+/refs/heads/master/src/cmd/compile/abi-internal.md)
