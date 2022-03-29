@@ -428,5 +428,5 @@ Go鼓励按值传递复合值，这简化了关于变化和竞争的推断。
 [^l152]: 图示中的排列顺序，从上到下是从低地址到高地址的顺序，也就是说上面是栈顶方向，下面是栈底方向。  
 [^l171]: 原文是`Only arguments, not results, are assigned a spill area on the stack.`，经笔者测试发现，未开启优化的情况下（-gcflags='-N -l'），函数返回的结果也会在栈上保留溢出空间。笔者用类似的示例代码做了[实验](examples/call_convention/layout.md)（基于Go1.17），分别给出了未开启优化（-gcflags='-N -l'）和开启优化（-gcflags='-l'）的情况下，栈和寄存器的分配情况共读者参考。  
 [^l176]: 原文是`An alternative would be to pack multiple sub-word values into registers`，这句话里笔者没能理解这个`sub-word`的含义，有人明白的话请告诉我。  
-[^l268]: 在汇编语言中，存在函数序言（prologue）、函数尾声（epilogue）的概念，详情见[wiki](https://en.wikipedia.org/wiki/Function_prologue_and_epilogue)。  
-[^l300]: CPU提供的FLAGS寄存器，详情见[wiki](https://en.wikipedia.org/wiki/FLAGS_register)。  
+[^l268]: 在汇编语言中，存在函数序言（prologue）、函数尾声（epilogue）的概念，详情见[wiki](https://en.wikipedia.org/wiki/Function_prologue_and_epilogue)以及[CSDN](https://blog.csdn.net/abc123lzf/article/details/109258188)。  
+[^l300]: CPU提供的FLAGS寄存器，详情见[wiki](https://en.wikipedia.org/wiki/FLAGS_register)以及[CSDN](https://blog.csdn.net/zang141588761/article/details/103984226)。  
