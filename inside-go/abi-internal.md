@@ -416,14 +416,14 @@ Go鼓励按值传递复合值，这简化了关于变化和竞争的推断。
 随着可用寄存器数量的增加，溢出所需空间的增加在很大程度上抵消了栈参数所需的空间减少，但随着可用寄存器的增加，所需的总栈空间普遍减少。
 无论如何这确实表明在未来消除溢出槽会显着降低栈需求。  
 
+## 扩展阅读
+
+- [Go源码reflect/abi.go](https://go.dev/src/reflect/abi.go)
+- [reflect包中的abi.go解析](https://segmentfault.com/a/1190000041410892)
+
 ## 注解
 
 [^l84]: 在callee的栈帧创建后的执行过程中会使用寄存器的值填充相应空间。  
 [^l88]: 最后一句原文是`Let S, the type sequence defining the stack frame, be empty.`，实际上这个序列S主要保存的是`abiStep`结构体切片，`abiStep`中包含分配方式、内存布局中的位置信息、栈上的偏移量和寄存器索引等数据。  
 [^l152]: 图示中的排列顺序，从上到下是从低地址到高地址的顺序，也就是说上面是栈顶方向，下面是栈底方向。  
-[^l171]: 原文是`Only arguments, not results, are assigned a spill area on the stack.`，经笔者测试发现，未开启优化的情况下（-gcflags='-N -l'），函数返回的结果也会在栈上保留溢出空间。笔者用类似的示例代码做了[实验](examples/call_convention/layout.md)（基于Go1.17），分别给出了未开启优化（-gcflags='-N -l'）和开启优化（-gcflags='-l'）的情况下，栈和寄存器的分配情况共读者参考。
-
-## 扩展阅读
-
-- [Go源码reflect/abi.go](https://go.dev/src/reflect/abi.go)
-- [reflect包中的abi.go解析](https://segmentfault.com/a/1190000041410892)
+[^l171]: 原文是`Only arguments, not results, are assigned a spill area on the stack.`，经笔者测试发现，未开启优化的情况下（-gcflags='-N -l'），函数返回的结果也会在栈上保留溢出空间。笔者用类似的示例代码做了[实验](examples/call_convention/layout.md)（基于Go1.17），分别给出了未开启优化（-gcflags='-N -l'）和开启优化（-gcflags='-l'）的情况下，栈和寄存器的分配情况共读者参考。  
