@@ -173,7 +173,7 @@ sizeof(S)    = 0  if N = 0
 ### 基本原理
 
 每个基本值都分配给属于自己的寄存器以优化构造和访问。
-另一种方法是将多个sub-word值打包到寄存器中，或者简单地将参数的内存布局映射到寄存器（这在C ABI中很常见），但这通常会增加打包和解包这些值的成本。
+另一种方法是将多个sub-word值打包到寄存器中[^l176]，或者简单地将参数的内存布局映射到寄存器（这在C ABI中很常见），但这通常会增加打包和解包这些值的成本。
 现代架构有足够多的寄存器来以这种方式为几乎所有函数传递所有参数和结果（参见附录），因此在寄存器之间传播基本值几乎没有缺点。  
 
 不能完全分配给寄存器的参数将完全在栈上传递，以防callee获取该参数的地址。
@@ -265,7 +265,7 @@ R15是一个暂存（scratch）寄存器，在动态链接的二进制文件中�
 在ABI0中，这些是未定义的，因此从ABIInternal到ABI0的转换可以忽略这些寄存器。  
 
 *基本原理*：对于当前的goroutine指针，我们选择了一个需要额外REX字节（REX前缀）的寄存器。
-虽然这为每个函数序言（function prologue）添加了一个字节，但它几乎不会在函数序言之外访问，我们希望提供更多的单字节寄存器以实现净赢。  
+虽然这为每个函数序言（function prologue[^l268]）添加了一个字节，但它几乎不会在函数序言之外访问，我们希望提供更多的单字节寄存器以实现净赢。  
 
 *基本原理*：我们可以允许R14（当前的goroutine指针）作为函数体中的暂存寄存器，因为它总是可以从amd64上的TLS恢复。
 但是为了简单起见，我们将其指定为固定寄存器，并与其他可能没有TLS中当前goroutine指针副本的架构保持一致。  
@@ -297,7 +297,7 @@ amd64架构不使用链接寄存器。
 
 Go ABI使用RBP作为帧指针寄存器与amd64平台约定兼容，因此Go可以与平台调试器和分析器互操作。  
 
-##### 标志寄存器
+##### 标志寄存器[^l300]
 
 调用时，方向标志(DF)始终被清除（设置为“前进”方向）。
 算术状态标志被视为暂存寄存器，并且不会在调用之间保留。
@@ -427,3 +427,6 @@ Go鼓励按值传递复合值，这简化了关于变化和竞争的推断。
 [^l88]: 最后一句原文是`Let S, the type sequence defining the stack frame, be empty.`，实际上这个序列S主要保存的是`abiStep`结构体切片，`abiStep`中包含分配方式、内存布局中的位置信息、栈上的偏移量和寄存器索引等数据。  
 [^l152]: 图示中的排列顺序，从上到下是从低地址到高地址的顺序，也就是说上面是栈顶方向，下面是栈底方向。  
 [^l171]: 原文是`Only arguments, not results, are assigned a spill area on the stack.`，经笔者测试发现，未开启优化的情况下（-gcflags='-N -l'），函数返回的结果也会在栈上保留溢出空间。笔者用类似的示例代码做了[实验](examples/call_convention/layout.md)（基于Go1.17），分别给出了未开启优化（-gcflags='-N -l'）和开启优化（-gcflags='-l'）的情况下，栈和寄存器的分配情况共读者参考。  
+[^l176]: 原文是`An alternative would be to pack multiple sub-word values into registers`，这句话里笔者没能理解这个`sub-word`的含义，有人明白的话请告诉我。  
+[^l268]: 在汇编语言中，存在函数序言（prologue）、函数尾声（epilogue）的概念，详情见[wiki](https://en.wikipedia.org/wiki/Function_prologue_and_epilogue)。  
+[^l300]: CPU提供的FLAGS寄存器，详情见[wiki](https://en.wikipedia.org/wiki/FLAGS_register)。  
