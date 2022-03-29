@@ -1,6 +1,10 @@
 # Go内部ABI规范（翻译&注解）
 
-## 正文
+## 原文
+
+- [Go internal ABI specification](https://go.googlesource.com/go/+/refs/heads/master/src/cmd/compile/abi-internal.md)
+
+## 翻译
 
 本文描述了Go的内部应用程序二进制接口（ABI），称为ABIInternal。Go的ABI定义了内存中数据的布局以及Go函数之间调用的约定。该ABI不稳定，会随着Go版本发生变化。如果您正在编写汇编代码，请参阅Go的[汇编文档](https://go.dev/doc/asm#directives)，该文档描述了Go的稳定ABI，称为 ABI0。  
 
@@ -32,7 +36,7 @@ Go的内置类型具有以下大小（Size）和对齐方式（Align）。语言
 
 `map`、`chan`和`func`类型的布局等价于*T。  
 
-为了描述其余复合类型的布局，我们首先定义具有N个字段的类型*序列*S的布局t<sub>1</sub>, t<sub>2</sub>, ..., t<sub>N</sub>。  
+为了描述其余复合类型的布局，我们首先定义具有N个字段的类型*序列*S的布局t<sub>1</sub>, t<sub>2</sub>, ..., t<sub>N</sub>。
 我们定义每个字段相对于0的基地址，以及序列的大小和对齐方式如下：  
 
 ```text
@@ -46,9 +50,9 @@ sizeof(S)    = 0  if N = 0
 
 其中sizeof(T)和alignof(T)分别是类型T的大小和对齐方式，而align(x, y)是将x向上舍入为y的倍数。  
 
-`interface{}`类型是由 1. 一个指向代表接口动态类型的运行时类型描述的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。  
-任何其他接口类型（除了空接口）都是由 1. 一个指向给出方法指针和数据字段的类型的运行时“itab”的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。  
-接口可以是“直接的（direct）”或“间接的（indirect）”，取决于其动态类型：direct接口将值直接存储在数据字段中，indirect接口存储指向数据字段值的指针。  
+`interface{}`类型是由 1. 一个指向代表接口动态类型的运行时类型描述的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。
+任何其他接口类型（除了空接口）都是由 1. 一个指向给出方法指针和数据字段的类型的运行时“itab”的指针 2. 一个`unsafe.Pointer`数据字段 组成的序列。
+接口可以是“直接的（direct）”或“间接的（indirect）”，取决于其动态类型：direct接口将值直接存储在数据字段中，indirect接口存储指向数据字段值的指针。
 只有当值由单个指针组成时，接口才能是direct的。  
 
 数组类型“[N]T”是由N个类型为T的字段组成的序列。  
@@ -64,19 +68,19 @@ sizeof(S)    = 0  if N = 0
 
 填充字节（padding byte）通过获取最终的空fN字段的地址来防止创建超出终点的指针。  
 
-请注意，用户编写的汇编代码通常不应依赖于Go类型布局，而应使用[`go_asm.h`](https://go.dev/doc/asm#data-offsets)中定义的常量。
+请注意，用户编写的汇编代码通常不应依赖于Go类型布局，而应使用[`go_asm.h`](https://go.dev/doc/asm#data-offsets)中定义的常量。  
 
 ### 函数调用参数和结果的传递
 
-函数调用使用栈和寄存器组合传递参数和结果。  
-每个参数或结果要么完全在寄存器中传递，要么完全在栈中传递。  
-因为访问寄存器通常比访问栈快，所以参数和结果优先在寄存器中传递。  
+函数调用使用栈和寄存器组合传递参数和结果。
+每个参数或结果要么完全在寄存器中传递，要么完全在栈中传递。
+因为访问寄存器通常比访问栈快，所以参数和结果优先在寄存器中传递。
 但是，任何包含非平凡数组或不完全适合剩余可用寄存器的参数或结果都会在栈上传递。  
 
-每个体系结构都定义了一个整数寄存器序列和一个浮点寄存器序列。  
+每个体系结构都定义了一个整数寄存器序列和一个浮点寄存器序列。
 在高层次上，参数和结果被递归地分解为基本类型的值，并且将这些基本值分配给这些序列中的寄存器。  
 
-参数和结果可以共享相同的寄存器，但不共享相同的栈空间。  
+参数和结果可以共享相同的寄存器，但不共享相同的栈空间。
 除了在栈上传递的参数和结果之外，调用者还在栈上为所有基于寄存器的参数保留溢出空间（但不填充此空间）。  
 
 函数或方法F的接收器、参数和结果使用以下算法分配给寄存器或栈：  
@@ -136,15 +140,15 @@ sizeof(S)    = 0  if N = 0
 
 为了执行函数调用，调用者从其栈帧中的最低地址开始为调用栈帧保留空间，将参数存储在由上述算法确定的寄存器和参数栈字段中，并执行调用。
 在调用时，溢出空间、结果栈字段和结果寄存器未初始化。
-返回时，被调用者必须将结果存储到由上述算法确定的所有结果寄存器和结果栈字段中。
+返回时，被调用者必须将结果存储到由上述算法确定的所有结果寄存器和结果栈字段中。  
 
-没有被调用者保存的（callee-save）寄存器，因此调用可能会覆盖任何没有固定含义的寄存器，包括参数寄存器。
+没有被调用者保存的（callee-save）寄存器，因此调用可能会覆盖任何没有固定含义的寄存器，包括参数寄存器。  
 
 ### 例子
 
 考虑具有假想的整数寄存器R0-R9的64位架构上的函数`func f(a1 uint8, a2 [2]uintptr, a3 uint8) (r1 struct { x uintptr; y [2]uintptr }, r2 string)`。  
 
-进入时，`a1`分配给`R0`，`a3`分配给`R1`，栈帧按以下顺序排列：
+进入时，`a1`分配给`R0`，`a3`分配给`R1`，栈帧按以下顺序排列：  
 
 ```text
     a2      [2]uintptr
@@ -155,7 +159,7 @@ sizeof(S)    = 0  if N = 0
     _       [6]uint8  // alignment padding
 ```
 
-在栈帧中，只有`a2`字段在进入时被初始化；帧的其余部分未初始化。  
+在栈帧中，只有`a2`字段在进入时被初始化；帧的其余部分未初始化。    
 
 退出时，`r2.base`分配给`R0`，`r2.len`分配给`R1`，并且`r1.x`和`r1.y`在栈帧中被初始化。  
 
@@ -332,84 +336,46 @@ MXCSR状态位是被调用者保存的。
 
 #### 溢出路径改进
 
-The ABI currently reserves spill space for argument registers so the
-compiler can statically generate an argument spill path before calling
-into `runtime.morestack` to grow the stack.
-This ensures there will be sufficient spill space even when the stack
-is nearly exhausted and keeps stack growth and stack scanning
-essentially unchanged from ABI0.
+ABI目前为参数寄存器保留溢出空间，因此编译器可以在调用`runtime.morestack`增大栈之前静态生成参数的溢出路径。
+这确保即使在栈几乎耗尽时也有足够的溢出空间，并保持栈增长和栈扫描的行为与ABI0基本不变。  
 
-However, this wastes stack space (the median wastage is 16 bytes per
-call), resulting in larger stacks and increased cache footprint.
-A better approach would be to reserve stack space only when spilling.
-One way to ensure enough space is available to spill would be for
-every function to ensure there is enough space for the function's own
-frame *as well as* the spill space of all functions it calls.
-For most functions, this would change the threshold for the prologue
-stack growth check.
-For `nosplit` functions, this would change the threshold used in the
-linker's static stack size check.
+然而，这会浪费栈空间（每次调用浪费了16字节，取中间值），从而导致栈更大，并且增加了缓存占用空间。
+更好的方法是仅在溢出时保留栈空间。
+确保有足够空间可供溢出的一种方法是为每个函数保留足够的空间用于函数自己的帧*以及*它调用的所有函数的溢出空间。
+对于大多数函数，这将更改序言栈（prologue stack）增长检查的阈值。
+对于`nosplit`函数，这将更改链接器的静态栈大小检查中使用的阈值。  
 
-Allocating spill space in the callee rather than the caller may also
-allow for faster reflection calls in the common case where a function
-takes only register arguments, since it would allow reflection to make
-these calls directly without allocating any frame.
+在被调用者而不是调用者中分配溢出空间的方式，可以使反射调用更快（在函数只接受寄存器参数的常见情况下），因为它可以不分配任何帧就能让反射直接进行这些调用。  
 
-The statically-generated spill path also increases code size.
-It is possible to instead have a generic spill path in the runtime, as
-part of `morestack`.
-However, this complicates reserving the spill space, since spilling
-all possible register arguments would, in most cases, take
-significantly more space than spilling only those used by a particular
-function.
-Some options are to spill to a temporary space and copy back only the
-registers used by the function, or to grow the stack if necessary
-before spilling to it (using a temporary space if necessary), or to
-use a heap-allocated space if insufficient stack space is available.
-These options all add enough complexity that we will have to make this
-decision based on the actual code size growth caused by the static
-spill paths.
+静态生成溢出路径也会增加代码大小。
+使用运行时通用溢出路径作为“morestack”的一部分来替代也是可能的。
+然而，这使得保留溢出空间变得复杂，因为在大多数情况下，溢出所有可能的寄存器参数比仅溢出特定函数的占用更多的空间。
+有一些选择是，溢出到临时空间并仅复制回函数使用的寄存器，或者在溢出到它之前按需增大栈（需要的话使用临时空间），或者如果栈空间不足则使用堆分配的空间。
+这些选择都增加了足够的复杂性，我们必须根据静态溢出路径导致的实际代码大小的增长情况来做出这个决定。  
 
-#### Clobber sets
+#### Clobber集
 
-As defined, the ABI does not use callee-save registers.
-This significantly simplifies the garbage collector and the compiler's
-register allocator, but at some performance cost.
-A potentially better balance for Go code would be to use *clobber
-sets*: for each function, the compiler records the set of registers it
-clobbers (including those clobbered by functions it calls) and any
-register not clobbered by function F can remain live across calls to
-F.
+正如定义的那样，ABI不使用被调用者保存寄存器。
+这显着简化了垃圾收集器和编译器的寄存器分配器，但会带来一些性能成本。
+对于Go代码来说可能更好的平衡是使用*Clobber集*：对于每个函数，编译器记录它clobber的寄存器集合（包括那些被它调用的函数clobber的寄存器），并且任何未被函数F clobber的寄存器都可以在F的调用处保留下来。  
 
-This is generally a good fit for Go because Go's package DAG allows
-function metadata like the clobber set to flow up the call graph, even
-across package boundaries.
-Clobber sets would require relatively little change to the garbage
-collector, unlike general callee-save registers.
-One disadvantage of clobber sets over callee-save registers is that
-they don't help with indirect function calls or interface method
-calls, since static information isn't available in these cases.
+这通常非常适合Go，因为Go的package DAG允许函数元数据（如Clobber集）沿调用图向上流动，甚至跨越package边界。
+与一般的被调用者保存寄存器不同，Clobber集需要对垃圾收集器进行相对较少的更改。
+与被调用者保存寄存器相比，Clobber集的一个缺点是它们对间接函数调用或接口方法调用没有帮助，因为在这些情况下静态信息不可用。  
 
-#### Large aggregates
+#### 大聚集体
 
-Go encourages passing composite values by value, and this simplifies
-reasoning about mutation and races.
-However, this comes at a performance cost for large composite values.
-It may be possible to instead transparently pass large composite
-values by reference and delay copying until it is actually necessary.
+Go 鼓励按值传递复合值，这简化了关于mutation和races的推断。
+但是对于大的复合值还是会带来性能开销。
+可以改为通过引用来透明地传递大的复合值，并且延迟复制直到真正需要的时候才进行。  
 
-### Appendix: Register usage analysis
+### 附录：寄存器使用分析
 
-In order to understand the impacts of the above design on register
-usage, we
-[analyzed](https://github.com/aclements/go-misc/tree/master/abi) the
-impact of the above ABI on a large code base: cmd/kubelet from
-[Kubernetes](https://github.com/kubernetes/kubernetes) at tag v1.18.8.
+为了了解上述设计对寄存器使用的影响，我们[分析](https://github.com/aclements/go-misc/tree/master/abi) 上述ABI对大型代码库的影响 ：来自 [Kubernetes](https://github.com/kubernetes/kubernetes) 标签 v1.18.8 的 cmd/kubelet。  
 
-The following table shows the impact of different numbers of available
-integer and floating-point registers on argument assignment:
+下表显示了不同数量的可用整数和浮点寄存器对参数分配的影响：  
 
-```
+```text
 |      |        |       |      stack args |          spills |     stack total |
 | ints | floats | % fit | p50 | p95 | p99 | p50 | p95 | p99 | p50 | p95 | p99 |
 |    0 |      0 |  6.3% |  32 | 152 | 256 |   0 |   0 |   0 |  32 | 152 | 256 |
@@ -433,42 +399,20 @@ integer and floating-point registers on argument assignment:
 |    ∞ |      8 | 99.8% |   0 |   0 |   0 |  24 | 112 | 216 |  24 | 120 | 216 |
 ```
 
-The first two columns show the number of available integer and
-floating-point registers.
-The first row shows the results for 0 integer and 0 floating-point
-registers, which is equivalent to ABI0.
-We found that any reasonable number of floating-point registers has
-the same effect, so we fixed it at 8 for all other rows.
+前两列显示可用整数和浮点寄存器的数量。
+第一行显示了0个整数和0个浮点寄存器的结果，相当于ABI0。
+我们发现任何合理数量的浮点寄存器都具有相同的效果，因此我们将所有其他行固定为8。  
 
-The “% fit” column gives the fraction of functions where all arguments
-and results are register-assigned and no arguments are passed on the
-stack.
-The three “stack args” columns give the median, 95th and 99th
-percentile number of bytes of stack arguments.
-The “spills” columns likewise summarize the number of bytes in
-on-stack spill space.
-And “stack total” summarizes the sum of stack arguments and on-stack
-spill slots.
-Note that these are three different distributions; for example,
-there’s no single function that takes 0 stack argument bytes, 16 spill
-bytes, and 24 total stack bytes.
+“% fit”列给出了所有参数和结果都被寄存器分配并且没有参数在堆栈上传递的函数的分数。
+三个“堆栈参数”列给出堆栈参数字节的中位数、第 95 和第 99 个百分位数。
+“溢出”列同样总结了堆栈溢出空间中的字节数。
+“堆栈总数”总结了堆栈参数和堆栈溢出槽的总和。
+请注意，这是三种不同的分布； 例如，没有一个函数需要 0 个堆栈参数字节、16 个溢出字节和 24 个总堆栈字节。  
 
-From this, we can see that the fraction of functions that fit entirely
-in registers grows very slowly once it reaches about 90%, though
-curiously there is a small minority of functions that could benefit
-from a huge number of registers.
-Making 9 integer registers available on amd64 puts it in this realm.
-We also see that the stack space required for most functions is fairly
-small.
-While the increasing space required for spills largely balances out
-the decreasing space required for stack arguments as the number of
-available registers increases, there is a general reduction in the
-total stack space required with more available registers.
-This does, however, suggest that eliminating spill slots in the future
-would noticeably reduce stack requirements.
+由此，我们可以看到完全适合寄存器的函数比例在达到 90% 左右时增长非常缓慢，但奇怪的是，有一小部分函数可以从大量寄存器中受益。
+在 amd64 上提供 9 个整数寄存器使其进入这个领域。
+我们还看到大多数函数所需的堆栈空间相当小。
+虽然随着可用寄存器数量的增加，溢出所需空间的增加在很大程度上抵消了堆栈参数所需的空间减少，但随着可用寄存器的增加，所需的总堆栈空间普遍减少。
+然而，这确实表明在未来消除溢出槽会显着降低堆栈需求。  
 
 ## 注解
-
-## 参考资料
-
-- [Go internal ABI specification](https://go.googlesource.com/go/+/refs/heads/master/src/cmd/compile/abi-internal.md)
