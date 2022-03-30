@@ -9,4 +9,5 @@
 ## Go语言底层探究
 
 - [基础篇](inside-go/article.md)
+- [Go内部ABI规范（翻译&注解）](inside-go/abi-internal.md)
 - [讨论区](https://github.com/JinWuZhao/technique-sharing/issues/2)
