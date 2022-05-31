@@ -871,4 +871,4 @@ type Matrix[n int] [n][n]float64
 
 ## 精选评论
 
-[^来自A7103的评论] constraints包已经从标准库中被移除，同时添加到golang.org/x/exp/constraints。
+[^来自A7103的评论]: constraints包已经从标准库中被移除，同时添加到golang.org/x/exp/constraints。
