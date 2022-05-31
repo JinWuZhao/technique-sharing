@@ -456,7 +456,7 @@ func ForEachIterable[K comparable, V any, T Iterable[K, V]](iter T) {
 
 #### 标准库提供的约束
 
-Go 标准库新增了一个名为`constraints`的包，里面定义了一些通用的约束。代码很少，这里直接贴出来给大家看看。
+Go 标准库新增了一个名为`constraints`的包，里面定义了一些通用的约束。代码很少，这里直接贴出来给大家看看。[^来自A7103的评论]
 
 ```go
 package constraints
@@ -868,3 +868,7 @@ type Matrix[n int] [n][n]float64
 ## 相关讨论
 
 [点击进入讨论区](https://github.com/JinWuZhao/technique-sharing/issues/1)
+
+## 精选评论
+
+[^来自A7103的评论] constraints包已经从标准库中被移除，同时添加到golang.org/x/exp/constraints。
