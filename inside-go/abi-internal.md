@@ -107,7 +107,7 @@ sizeof(S)    = 0  if N = 0
 1. 如果T是适合整数寄存器的布尔或整数类型，则将V分配给寄存器I，并递增I。
 2. 如果T是适合两个整数寄存器的整数类型，则将V的最低有效部分和最高有效部分分别分配给寄存器I和I+1，并将I增加2。
 3. 如果T是浮点类型并且可以在浮点寄存器中不损失精度地表示，则将V分配给寄存器FP，并递增FP。
-4. 如果T是一个复杂类型，则递归地寄存器分配它的实部和虚部。
+4. 如果T是一个复数类型，则递归地寄存器分配它的实部和虚部。
 5. 如果T是指针类型、映射类型、通道类型或函数类型，则将V分配给寄存器I，并递增I。
 6. 如果T是字符串类型、接口类型或切片类型，则递归地寄存器分配V的组件（字符串和接口有2个，切片有3个）。
 7. 如果T是结构体类型，则递归地寄存器分配V的每个字段。
@@ -427,6 +427,6 @@ Go鼓励按值传递复合值，这简化了关于变化和竞争的推断。
 [^l88]: 最后一句原文是`Let S, the type sequence defining the stack frame, be empty.`，实际上这个序列S主要保存的是`abiStep`结构体切片，`abiStep`中包含分配方式、内存布局中的位置信息、栈上的偏移量和寄存器索引等数据。  
 [^l152]: 图示中的排列顺序，从上到下是从低地址到高地址的顺序，也就是说上面是栈顶方向，下面是栈底方向。  
 [^l171]: 原文是`Only arguments, not results, are assigned a spill area on the stack.`，经笔者测试发现，未开启优化的情况下（-gcflags='-N -l'），函数返回的结果也会在栈上保留溢出空间。笔者用类似的示例代码做了[实验](examples/call_convention/layout.md)（基于Go1.17），分别给出了未开启优化（-gcflags='-N -l'）和开启优化（-gcflags='-l'）的情况下，栈和寄存器的分配情况共读者参考。  
-[^l176]: 原文是`An alternative would be to pack multiple sub-word values into registers`，这句话里笔者没能理解这个`sub-word`的含义，有人明白的话请告诉我。  
+[^l176]: 原文是`An alternative would be to pack multiple sub-word values into registers`。网友lanthora的见解：一个寄存器是64位的，也就是一个word的大小，不到一个word大小的参数就是sub-word，当寄存器个数不够用的时候(或者什么其他的情况下).可以把多个小的参数放到同一个寄存器里。举个例子，假如有4个参数，分别是 uint8 uint8 uint16 uint32，在go的实现里，会被放到4个不同的寄存器，但是理论上也可以把这4个参数以某种特定方式放到一个寄存器里。（来自[TG群](https://t.me/GolangCN/273861)）  
 [^l268]: 在汇编语言中，存在函数序言（prologue）、函数尾声（epilogue）的概念，详情见[wiki](https://en.wikipedia.org/wiki/Function_prologue_and_epilogue)以及[CSDN](https://blog.csdn.net/abc123lzf/article/details/109258188)。  
 [^l300]: CPU提供的FLAGS寄存器，详情见[wiki](https://en.wikipedia.org/wiki/FLAGS_register)以及[CSDN](https://blog.csdn.net/zang141588761/article/details/103984226)。  
